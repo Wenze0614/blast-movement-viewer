@@ -100,6 +100,26 @@ const CASES: Record<string, Case> = {
     blocked: ['three', '@/engine/disposeBag'],
     allowed: ['react', 'zustand', './store'],
   },
+  server: {
+    file: 'src/server/__probe__.ts',
+    blocked: [
+      'three',
+      'react',
+      '@react-three/fiber',
+      '@/engine/disposeBag',
+      '../engine/disposeBag',
+      '@/state/store',
+      '@/data',
+      '@/viewer/Viewer',
+      '../../app/page',
+    ],
+    allowed: ['@/core/types', '@/core/api-types', '@/core/movement', '../core/blasts', 'zod', 'next/server'],
+  },
+  app: {
+    file: 'app/api/__probe__/route.ts',
+    blocked: ['@react-three/fiber', '@react-three/drei'],
+    allowed: ['@/core/types', '@/core/movement', '@/core/blasts', 'next/server', 'react', 'zod'],
+  },
   data: {
     file: 'src/data/__probe__.ts',
     blocked: ['three', 'react', '@/engine/types', '@/viewer/Viewer'],

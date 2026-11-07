@@ -32,12 +32,15 @@ Code against these. If a contract is wrong, say so in the PR and change it there
    MIN corner of the first block; block id = `i + nx * (j + ny * k)`. Call
    `THREE.Object3D.DEFAULT_UP.set(0, 0, 1)` before creating objects; no axis conversions anywhere.
    Units in names or comments: m, t, t/m³, g/t Au, g (oz = g / 31.1035).
-2. **Layer boundaries** (ESLint `no-restricted-imports`, see `eslint.config.mjs`):
-   - `src/core` — pure TS. No three, react, next, DOM globals or other app layers. Runs on server,
-     browser and Workers.
-   - `src/engine` — three.js, no React. `src/ui` — React, no three.
+2. **Layer boundaries** (`eslint.config.mjs`: path zones via `import/no-restricted-paths` +
+   package bans via `no-restricted-imports`; regression-tested in `tests/lint-boundaries.test.ts`):
+   - `src/core` — pure TS. May import only `src/core`, `d3-contour` and `simplex-noise` (+ `vitest`
+     in tests). No three, react, next, zustand, `node:*`, DOM globals, app/ or other layers. Runs
+     on server, browser and Workers. Adding a package to core = edit `CORE_PACKAGES` with a reason.
+   - `src/engine` — three.js, no React. `src/ui` — React, no three. No `@react-three/*` anywhere.
    - `src/state` (store) and `src/data` (DataSource) are the only bridges between React and the engine.
    - `src/server` — route-handler helpers only. `src/viewer` — canvas + engine lifecycle.
+   - When you add a boundary, add blocked/allowed cases to the regression test.
 3. **System contract** (`src/engine/types.ts`): declare a `phase`; all motion from `dt` (clamped);
    `dispose()` is mandatory and every GPU resource goes in `ctx.bag`. React StrictMode stays on;
    mount → unmount → mount must return `renderer.info.memory` to baseline. React never re-renders

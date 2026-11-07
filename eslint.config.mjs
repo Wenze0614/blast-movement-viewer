@@ -85,8 +85,13 @@ const R3F = {
   group: ['@react-three/*', '@react-three/**'],
   message: 'No React Three Fiber/drei: the renderer is plain three.js (ADR-1).',
 };
+/**
+ * Raw shader files need a loader; shaders are `.glsl.ts` modules instead. The specifier of a
+ * `.glsl.ts` module ends in `.glsl` (`./blocks.vert.glsl`), so `*.glsl` stays importable: a raw
+ * `.glsl` file has no TS module declaration and fails typecheck anyway.
+ */
 const SHADER_FILES = {
-  group: ['**/*.glsl', '**/*.vert', '**/*.frag'],
+  regex: '(\\.(vert|frag|wgsl)$)|(\\?raw$)|!',
   message: 'Shaders are `.glsl.ts` modules exporting a template string (no loaders).',
 };
 

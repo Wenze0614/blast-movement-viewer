@@ -26,6 +26,12 @@ import { canonicalParams, hashParams } from './hash';
 import { createSeededNoise3D, deriveSeed } from './rng';
 import type { BlastParameters, BlockModel, GridSpec, Heightfield, MovementResult, Vec2 } from './types';
 
+/**
+ * Version of this movement heuristic. Bump it whenever a code change alters `computeMovement`
+ * output for the same model + params, so immutable cached responses keyed on paramsHash expire.
+ */
+export const MOVEMENT_MODEL_VERSION = 1;
+
 /** ADR-3 step 4: stop after 20·N block moves even if not fully relaxed. */
 export const RELAXATION_MOVE_FACTOR = 20;
 /** Longest baseline (cells) checked by the repose criterion. */
@@ -404,10 +410,18 @@ export function computeMovementDetailed(
   };
 }
 
-/** Identifies the model in the params hash (grid + model seed). */
+/**
+ * Identifies the model + algorithm in the params hash (ADR-12: key = (blast config, params)).
+ * `configHash` covers the complete blast config (grid, grades, ore body, seed, generator version);
+ * MOVEMENT_MODEL_VERSION covers changes to this heuristic itself.
+ */
 export function modelHashContext(model: BlockModel): string {
-  const g = model.grid;
-  return `${g.origin.join(',')};${g.blockSize.join(',')};${g.nx}x${g.ny}x${g.nz};${model.seed}`;
+  if (!model.configHash) {
+    // A model without a config hash (e.g. a decoder that dropped it) would silently share cache
+    // keys with other ore bodies. Fail loudly instead.
+    throw new TypeError('computeMovement: model.configHash is missing (build models with generateBlockModel)');
+  }
+  return `movement/v${MOVEMENT_MODEL_VERSION};model=${model.configHash}`;
 }
 
 function worldCellMapper(face: BlastParameters['freeFace'], nA: number, nB: number) {

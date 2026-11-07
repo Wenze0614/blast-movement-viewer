@@ -3,9 +3,10 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getBlastConfig } from '../blasts';
-import { blockIndex, generateBlockModel } from '../blockModel';
+import { blockIndex, blockModelConfigHash, generateBlockModel, type BlockModelConfig } from '../blockModel';
 import { DEFAULT_BLAST_PARAMETERS } from '../defaults';
 import { canonicalParams } from '../hash';
+import type { LensFeature } from '../orebody';
 import {
   allowedDrop,
   computeMovement,
@@ -304,6 +305,69 @@ describe('computeMovement outputs', () => {
     expect(Array.from(a.end)).toEqual(Array.from(r017.result.end));
     // same params on another blast → different hash
     expect(r022.result.paramsHash).not.toBe(r017.result.paramsHash);
+  });
+
+  describe('paramsHash identifies the complete blast config (ADR-12)', () => {
+    const base = getBlastConfig('b1040-017')!;
+    const hashOf = (cfg: BlockModelConfig) => computeMovement(generateBlockModel(cfg), P).paramsHash;
+    const lens = base.orebody.features[0] as LensFeature;
+
+    it('same grid + seed but a different ore body → different configHash and paramsHash', () => {
+      const variants: Record<string, BlockModelConfig> = {
+        peakGrade: { ...base, orebody: { ...base.orebody, features: [{ ...lens, peakGrade: lens.peakGrade + 0.1 }] } },
+        lensGeometry: { ...base, orebody: { ...base.orebody, features: [{ ...lens, dipDeg: lens.dipDeg + 1 }] } },
+        extraPod: {
+          ...base,
+          orebody: {
+            ...base.orebody,
+            features: [...base.orebody.features, { kind: 'pod', centre: [20, 20, 1035], radii: [4, 4, 4], rotationDeg: 0, peakGrade: 2 }],
+          },
+        },
+        density: { ...base, orebody: { ...base.orebody, density: { host: 2.6, mineralised: 2.75 } } },
+        noise: { ...base, orebody: { ...base.orebody, noise: { ...base.orebody.noise, amplitude: 0.5 } } },
+        grades: { ...base, grades: { ...base.grades, cutoff: 0.6 } },
+      };
+      const baseModel = generateBlockModel(base);
+      const baseHash = hashOf(base);
+      for (const [name, cfg] of Object.entries(variants)) {
+        expect(cfg.grid).toEqual(base.grid);
+        expect(cfg.seed).toBe(base.seed);
+        const m = generateBlockModel(cfg);
+        expect({ name, differs: m.configHash !== baseModel.configHash }).toEqual({ name, differs: true });
+        expect({ name, differs: hashOf(cfg) !== baseHash }).toEqual({ name, differs: true });
+      }
+    });
+
+    it('identical configs → identical hashes, independent of object identity and key order', () => {
+      const clone: BlockModelConfig = JSON.parse(JSON.stringify(base));
+      const reordered: BlockModelConfig = {
+        seed: base.seed,
+        orebody: Object.fromEntries(Object.entries(base.orebody).reverse()) as BlockModelConfig['orebody'],
+        grades: Object.fromEntries(Object.entries(base.grades).reverse()) as BlockModelConfig['grades'],
+        grid: Object.fromEntries(Object.entries(base.grid).reverse()) as BlockModelConfig['grid'],
+      };
+      const h = hashOf(base);
+      expect(hashOf(clone)).toBe(h);
+      expect(hashOf(reordered)).toBe(h);
+      expect(generateBlockModel(clone).configHash).toBe(blockModelConfigHash(base));
+      expect(blockModelConfigHash(base)).toMatch(/^[0-9a-f]{16}$/);
+    });
+
+    it('display-only blast fields (name, description, pattern, default params) do not change the hash', () => {
+      const relabelled = {
+        ...base,
+        name: 'Renamed',
+        description: 'Other text',
+        pattern: { ...base.pattern, burden: 5 },
+        defaultParams: { ...base.defaultParams, maxThrow: 3 },
+      };
+      expect(blockModelConfigHash(relabelled)).toBe(blockModelConfigHash(base));
+    });
+
+    it('refuses a model without configHash instead of hashing it ambiguously', () => {
+      const model = { ...generateBlockModel(base), configHash: '' };
+      expect(() => computeMovement(model, P)).toThrow(/configHash/);
+    });
   });
 
   it('throws a RangeError for impossible params', () => {

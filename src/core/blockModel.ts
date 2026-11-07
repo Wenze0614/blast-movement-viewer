@@ -4,6 +4,7 @@
  * Grid convention: origin = MIN corner of the first block; id = i + nx * (j + ny * k);
  * centroid = origin + (ijk + ½) · blockSize; k = nz − 1 is the top flitch.
  */
+import { canonicalJson, fnv1a64 } from './hash';
 import { createOrebodySampler, type OrebodySpec } from './orebody';
 import {
   OreClass,
@@ -22,6 +23,23 @@ export interface BlockModelConfig {
   orebody: OrebodySpec;
   /** Model seed (grade noise). Independent of BlastParameters.seed (movement noise). */
   seed: number;
+}
+
+/**
+ * Version of the block-model generator (this file + orebody.ts + rng.ts). Bump it whenever a code
+ * change alters generated grades/densities for the SAME config, so cached results keyed on
+ * `configHash` (ADR-12 immutable CDN responses) are invalidated.
+ */
+export const MODEL_GENERATOR_VERSION = 1;
+
+/**
+ * Canonical hash of everything that determines a block model: generator version, grid, grade
+ * settings, the complete ore body definition and the model seed. Display-only fields of a
+ * BlastConfig (id, name, pattern, default params) are deliberately excluded.
+ */
+export function blockModelConfigHash(cfg: BlockModelConfig): string {
+  const { grid, grades, orebody, seed } = cfg;
+  return fnv1a64(`bmv-model/v${MODEL_GENERATOR_VERSION}|${canonicalJson({ grid, grades, orebody, seed })}`);
 }
 
 export const blockCount = (grid: GridSpec): number => grid.nx * grid.ny * grid.nz;
@@ -100,6 +118,7 @@ export function generateBlockModel(cfg: BlockModelConfig): BlockModel {
     rockType,
     oreClass,
     seed,
+    configHash: blockModelConfigHash(cfg),
   };
 }
 

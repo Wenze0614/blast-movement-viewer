@@ -1,8 +1,9 @@
 /**
  * Canonical blast parameters and their hash (docs/02-plan.md ADR-12).
  *
- * Movement is a pure function of (blast model, params), so it is cacheable by a canonical key:
- * fixed key order, numbers rounded to 2 dp, seed as a non-negative integer. `computeMovement`
+ * Movement is a pure function of (blast config, params), so it is cacheable by a canonical key:
+ * the model's `configHash` (canonical JSON of the complete config, see blockModel.ts) plus the
+ * params in fixed key order, numbers rounded to 2 dp, seed as a non-negative integer. `computeMovement`
  * computes with the canonical params, so two inputs with the same hash give the same result.
  * The hash is also the HTTP ETag of the movement endpoint.
  */
@@ -74,8 +75,38 @@ export function fnv1a64(s: string): string {
 }
 
 /**
- * Hash of (context, canonical params). `context` identifies the blast model (computeMovement
- * passes the grid and model seed), so the same params on two blasts give different hashes.
+ * Canonical JSON: object keys sorted (UTF-16 code-unit order) at every depth, `undefined`-valued
+ * keys omitted, -0 written as 0, numbers in JS shortest round-trip form. Equal values give equal
+ * strings regardless of key insertion order. Throws on values with no stable JSON form
+ * (NaN/±Infinity, undefined array items, functions, typed arrays, bigint).
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null) return 'null';
+  switch (typeof value) {
+    case 'number':
+      if (!Number.isFinite(value)) throw new RangeError(`canonicalJson: non-finite number ${value}`);
+      return JSON.stringify(value === 0 ? 0 : value);
+    case 'string':
+    case 'boolean':
+      return JSON.stringify(value);
+    case 'object': {
+      if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+      if (ArrayBuffer.isView(value)) throw new TypeError('canonicalJson: typed arrays are not supported');
+      const obj = value as Record<string, unknown>;
+      const keys = Object.keys(obj)
+        .filter((k) => obj[k] !== undefined)
+        .sort();
+      return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
+    }
+    default:
+      throw new TypeError(`canonicalJson: unsupported ${typeof value}`);
+  }
+}
+
+/**
+ * Hash of (context, canonical params). `context` identifies the blast model: computeMovement
+ * passes the model's `configHash` (complete blast config) plus the movement algorithm version,
+ * so the same params on two different models give different hashes.
  */
 export function hashParams(params: BlastParameters, context = ''): string {
   return fnv1a64(`${context}|${canonicalParamsString(params)}`);

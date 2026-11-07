@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_BLAST_PARAMETERS } from '../defaults';
 import { animatedCentroid, animatedScale, BLOCK_ANIMATION_DURATION, blockProgress, smoothstep01 } from '../easing';
-import { canonicalParams, canonicalParamsString, fnv1a64, hashParams, PARAM_KEYS, round2 } from '../hash';
+import { canonicalJson, canonicalParams, canonicalParamsString, fnv1a64, hashParams, PARAM_KEYS, round2 } from '../hash';
 import { createRng, createSeededNoise3D, deriveSeed, mulberry32 } from '../rng';
 
 describe('rng', () => {
@@ -87,6 +87,22 @@ describe('hash (ADR-12)', () => {
     expect(hashParams({ ...DEFAULT_BLAST_PARAMETERS, swellFactor: 1.3001 }, 'ctx')).toBe(h);
     expect(hashParams({ ...DEFAULT_BLAST_PARAMETERS, swellFactor: 1.31 }, 'ctx')).not.toBe(h);
     expect(hashParams(DEFAULT_BLAST_PARAMETERS, 'other')).not.toBe(h);
+  });
+
+  it('canonicalJson sorts keys at every depth and keeps array order', () => {
+    expect(canonicalJson({ b: 1, a: { d: [3, { z: 1, y: 2 }], c: 'x' } })).toBe('{"a":{"c":"x","d":[3,{"y":2,"z":1}]},"b":1}');
+    expect(canonicalJson({ a: 1, b: 2 })).toBe(canonicalJson({ b: 2, a: 1 }));
+    expect(canonicalJson([2, 1])).not.toBe(canonicalJson([1, 2]));
+  });
+
+  it('canonicalJson normalises -0, drops undefined keys and rejects unstable values', () => {
+    expect(canonicalJson({ x: -0, y: undefined, z: null, t: true })).toBe('{"t":true,"x":0,"z":null}');
+    expect(canonicalJson(0.1 + 0.2)).toBe('0.30000000000000004');
+    expect(() => canonicalJson({ x: NaN })).toThrow(RangeError);
+    expect(() => canonicalJson({ x: Infinity })).toThrow(RangeError);
+    expect(() => canonicalJson([1, undefined])).toThrow(TypeError);
+    expect(() => canonicalJson({ a: new Float32Array(2) })).toThrow(TypeError);
+    expect(() => canonicalJson({ f: () => 1 })).toThrow(TypeError);
   });
 });
 

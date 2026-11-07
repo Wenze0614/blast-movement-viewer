@@ -78,7 +78,7 @@ export function fnv1a64(s: string): string {
  * Canonical JSON: object keys sorted (UTF-16 code-unit order) at every depth, `undefined`-valued
  * keys omitted, -0 written as 0, numbers in JS shortest round-trip form. Equal values give equal
  * strings regardless of key insertion order. Throws on values with no stable JSON form
- * (NaN/±Infinity, undefined array items, functions, typed arrays, bigint).
+ * (NaN/±Infinity, undefined array items, sparse arrays, functions, typed arrays, bigint).
  */
 export function canonicalJson(value: unknown): string {
   if (value === null) return 'null';
@@ -90,7 +90,15 @@ export function canonicalJson(value: unknown): string {
     case 'boolean':
       return JSON.stringify(value);
     case 'object': {
-      if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+      if (Array.isArray(value)) {
+        // Array.prototype.map skips holes, which would emit invalid JSON such as `[,1]`.
+        const items: string[] = [];
+        for (let i = 0; i < value.length; i++) {
+          if (!(i in value)) throw new TypeError(`canonicalJson: sparse array (hole at index ${i})`);
+          items.push(canonicalJson(value[i]));
+        }
+        return `[${items.join(',')}]`;
+      }
       if (ArrayBuffer.isView(value)) throw new TypeError('canonicalJson: typed arrays are not supported');
       const obj = value as Record<string, unknown>;
       const keys = Object.keys(obj)

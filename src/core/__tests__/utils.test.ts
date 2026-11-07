@@ -104,6 +104,14 @@ describe('hash (ADR-12)', () => {
     expect(() => canonicalJson({ a: new Float32Array(2) })).toThrow(TypeError);
     expect(() => canonicalJson({ f: () => 1 })).toThrow(TypeError);
   });
+
+  it('canonicalJson rejects sparse arrays explicitly (holes would emit invalid JSON)', () => {
+    // eslint-disable-next-line no-sparse-arrays
+    expect(() => canonicalJson([1, , 3])).toThrow(/sparse array \(hole at index 1\)/);
+    expect(() => canonicalJson({ a: new Array(2) })).toThrow(TypeError);
+    expect(canonicalJson([])).toBe('[]');
+    expect(canonicalJson([null, 0])).toBe('[null,0]');
+  });
 });
 
 describe('easing (ADR-2, shared with the shader)', () => {

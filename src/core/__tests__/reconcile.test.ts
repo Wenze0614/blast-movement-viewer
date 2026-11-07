@@ -21,3 +21,11 @@ describe('reconcile (M7)', () => {
   it.todo('produces three scenarios: insitu_original, post_original, post_adjusted');
   it.todo('property: across 20 seeds × 2 blasts, adjusted loss + dilution <= original');
 });
+
+describe('reconciliation delta row (M7)', () => {
+  it.todo('fixture: post_adjusted − post_original matches hand-calculated mill t, mill grade, loss, dilution and Au');
+  it.todo('is field-by-field `to − from`, with loss and dilution in percentage points (not relative %)');
+  it.todo('metalToMillGrams > 0 means adjusting the line sends more Au to the mill');
+  it.todo('delta of a scenario against itself is all zeros');
+  it.todo('swapping from/to negates every field');
+});

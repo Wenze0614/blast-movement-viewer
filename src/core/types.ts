@@ -207,3 +207,22 @@ export interface ReconciliationResult {
   /** mill.metal / totalOre.metal * 100 */
   metalToMillPct: number;
 }
+
+/**
+ * M7 delta row: `to` minus `from`, field by field (e.g. post_adjusted − post_original, the value of
+ * adjusting the dig line for movement). Percentages are differences in percentage points.
+ */
+export interface ReconciliationDelta {
+  from: ScenarioKey;
+  to: ScenarioKey;
+  /** t */
+  millTonnes: number;
+  /** g/t */
+  millGrade: number;
+  /** percentage points; negative = less ore lost */
+  oreLossPct: number;
+  /** percentage points; negative = less dilution */
+  dilutionPct: number;
+  /** g Au to the mill (UI shows oz = g / 31.1035); positive = more metal recovered */
+  metalToMillGrams: number;
+}

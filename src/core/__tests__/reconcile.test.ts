@@ -85,6 +85,7 @@ describe('pointInPolygon (even–odd, ADR-5)', () => {
  * total ore = A + C = 90 t, metal 80 + 50 = 130 g, grade 130/90 = 1.4444 g/t
  * mill      = A + B = 80 t, metal 80 + 8 = 88 g, grade 88/80 = 1.1 g/t
  * ore loss  = 50 / 90 = 55.556 %;  dilution = 40 / 80 = 50 %;  metal to mill = 88/130 = 67.692 %
+ * ore metal recovery = ore→mill metal / total ore metal = 80 / 130 = 61.538 %  (excludes B's 8 g)
  * Au to mill = 88 / 31.1035 = 2.8293 oz
  */
 const FIX = {
@@ -115,6 +116,7 @@ describe('reconcile (M7)', () => {
     expect(r.oreLossPct).toBeCloseTo(55.5556, 3);
     expect(r.dilutionPct).toBeCloseTo(50, 10);
     expect(r.metalToMillPct).toBeCloseTo(67.6923, 3);
+    expect(r.oreMetalRecoveryPct).toBeCloseTo(61.5385, 3);
     expect(r.polygonId).toBe('original');
     expect(r.scenario).toBe('post_original');
   });
@@ -141,6 +143,22 @@ describe('reconcile (M7)', () => {
     expect(gramsToOz(31.1035)).toBe(1);
   });
 
+  it('ore metal recovery % = oreToMill.metal / totalOre.metal × 100 (dilution metal excluded)', () => {
+    expect(r.oreToMill.metalGrams).toBeCloseTo(80, 5);
+    expect(r.oreMetalRecoveryPct).toBeCloseTo((r.oreToMill.metalGrams / r.totalOre.metalGrams) * 100, 12);
+    // metalToMillPct counts B's 8 g of waste metal; recovery does not
+    expect(r.metalToMillPct - r.oreMetalRecoveryPct).toBeCloseTo((8 / 130) * 100, 4);
+    // adjusted line takes in C as well: recovery = (80 + 50) / 130 = 100 %
+    expect(reconcile(fixtureInput(ADJUSTED)).oreMetalRecoveryPct).toBeCloseTo(100, 10);
+  });
+
+  it('ore metal recovery never exceeds 100 % even when metalToMillPct does', () => {
+    // a polygon around everything: mill metal = 130 + 8 + 5 = 143 g > 130 g of ore metal
+    const all = reconcile(fixtureInput(poly([[square(-1, -1, 30, 30)]])));
+    expect(all.metalToMillPct).toBeGreaterThan(100);
+    expect(all.oreMetalRecoveryPct).toBeCloseTo(100, 10);
+  });
+
   it('oreToMill + oreToWaste = totalOre (tonnes and metal)', () => {
     expect(r.oreToMill.tonnes + r.oreToWaste.tonnes).toBeCloseTo(r.totalOre.tonnes, 10);
     expect(r.oreToMill.metalGrams + r.oreToWaste.metalGrams).toBeCloseTo(r.totalOre.metalGrams, 10);
@@ -153,6 +171,7 @@ describe('reconcile (M7)', () => {
     expect(e.oreLossPct).toBe(100);
     expect(e.dilutionPct).toBe(0);
     expect(e.metalToMillPct).toBe(0);
+    expect(e.oreMetalRecoveryPct).toBe(0);
     expect(Number.isFinite(e.mill.grade)).toBe(true);
   });
 

@@ -5,7 +5,8 @@
  * - Destination = mill if the block's plan centroid is inside the dig polygon (full-block rule,
  *   even–odd over all rings). Single dig horizon: the whole column is judged by one polygon.
  * - ore loss % = ore→waste t ÷ total ore t;  dilution % = waste→mill t ÷ mill t;
- *   mill grade = Σ t·g ÷ Σ t;  oz = g ÷ 31.1035.
+ *   mill grade = Σ t·g ÷ Σ t;  oz = g ÷ 31.1035;
+ *   ore metal recovery % = ore→mill metal ÷ total ore metal (excludes metal carried by dilution).
  * Runs on the client (cheap, O(N·V)) so it can update live when a dig line is edited.
  */
 import { GRAMS_PER_TROY_OZ } from './defaults';
@@ -97,6 +98,7 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
     oreLossPct: pct(oreToWaste.t, totalOre.t),
     dilutionPct: pct(wasteToMill.t, mill.t),
     metalToMillPct: pct(mill.m, totalOre.m),
+    oreMetalRecoveryPct: pct(oreToMill.m, totalOre.m),
   };
 }
 

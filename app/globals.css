@@ -1,0 +1,42 @@
+@import 'tailwindcss';
+
+/* Neutral engineering look: slate surfaces, one teal accent. No brand colours. */
+:root {
+  --background: #f4f5f7;
+  --foreground: #1c1f24;
+  --surface: #ffffff;
+  --muted: #5d6470;
+  --border: #d9dce1;
+  --accent: #0f8b8d;
+  --viewport: #20242b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #121418;
+    --foreground: #e6e8eb;
+    --surface: #1a1d22;
+    --muted: #9aa1ab;
+    --border: #2c3038;
+    --accent: #2bb3b1;
+    --viewport: #0d0f12;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-viewport: var(--viewport);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}

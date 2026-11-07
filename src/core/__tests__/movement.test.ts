@@ -173,6 +173,36 @@ describe('computeMovement (M3)', () => {
     }
   });
 
+  it('allowedDrop matches hand-computed thresholds: max(1, round(d · tan φ · c′ / H_b))', () => {
+    // tan 25° = 0.46631, tan 37° = 0.75355, tan 45° = 1 (values worked by hand, see each row).
+    const cases: [angle: number, d: number, cell: number, stack: number, expected: number][] = [
+      // cubic (c′ = H_b): drop = max(1, round(d · tan φ))
+      [37, 1, 2.5, 2.5, 1], // 0.754 → 1
+      [37, 2, 2.5, 2.5, 2], // 1.507 → 2
+      [37, 3, 2.5, 2.5, 2], // 2.261 → 2
+      [37, 4, 2.5, 2.5, 3], // 3.014 → 3
+      [37, 5, 2.5, 2.5, 4], // 3.768 → 4
+      [37, 6, 2.5, 2.5, 5], // 4.521 → 5
+      [25, 1, 2.5, 2.5, 1], // 0.466 → round 0, floor of 1 block
+      [25, 2, 2.5, 2.5, 1], // 0.933 → 1
+      [25, 4, 2.5, 2.5, 2], // 1.865 → 2
+      [25, 6, 2.5, 2.5, 3], // 2.798 → 3
+      [45, 1, 2.5, 2.5, 1], // 1
+      [45, 3, 2.5, 2.5, 3], // 3 (tan 45° is 0.9999… in floating point; must still round to 3)
+      [45, 6, 2.5, 2.5, 6], // 6
+      // swollen cubic block (c′ = H_b = 2.5 · 1.3^⅓ = 2.7275 m): the ratio is still 1
+      [37, 4, 2.7275, 2.7275, 3], // 3.014 → 3
+      // non-cubic: c′ = 2 m, H_b = 1 m → drop = round(2 · d · tan φ)
+      [37, 1, 2, 1, 2], // 1.507 → 2
+      [37, 2, 2, 1, 3], // 3.014 → 3
+      [37, 3, 2, 1, 5], // 4.521 → 5
+      [37, 4, 2, 1, 6], // 6.028 → 6
+    ];
+    for (const [angle, d, cell, stack, expected] of cases) {
+      expect({ angle, d, cell, stack, drop: allowedDrop(d, angle, cell, stack) }).toEqual({ angle, d, cell, stack, drop: expected });
+    }
+  });
+
   it('respects the angle of repose after relaxation (lattice criterion, see allowedDrop)', () => {
     // With cubic blocks one block step over one cell is 45°, so "neighbour difference ≤ tan(φ)·c′"
     // cannot hold literally for φ < 45°. The lattice criterion bounds the AVERAGE slope:
@@ -181,8 +211,13 @@ describe('computeMovement (M3)', () => {
       const { stats, result } = r;
       expect(stats.converged).toBe(true);
       const { nx, ny, cellSize } = result.postGrid;
-      const allowed = [0];
-      for (let d = 1; d <= REPOSE_MAX_BASELINE; d++) allowed.push(allowedDrop(d, P.reposeAngleDeg, cellSize, stats.stackHeight));
+      // Defaults are cubic (c′ = H_b·k), so the drop limit is max(1, round(d · tan 37°)) blocks,
+      // tan 37° = 0.75355 → d = 1..6: 0.75, 1.51, 2.26, 3.01, 3.77, 4.52 → 1, 2, 2, 3, 4, 5.
+      // Hand-computed (not from allowedDrop) so the pile is checked against the formula itself.
+      expect(P.reposeAngleDeg).toBe(37);
+      expect(cellSize).toBeCloseTo(stats.stackHeight, 10);
+      const allowed = [0, 1, 2, 2, 3, 4, 5];
+      expect(allowed.length).toBe(REPOSE_MAX_BASELINE + 1);
       let violations = 0;
       for (let iy = 0; iy < ny; iy++)
         for (let ix = 0; ix < nx; ix++) {

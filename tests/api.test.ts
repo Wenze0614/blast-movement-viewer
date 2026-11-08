@@ -119,7 +119,8 @@ describe('GET /api/blasts/:id/movement', () => {
 
   it('If-None-Match with the ETag (also weak / in a list) → 304 with the validators', async () => {
     for (const inm of [`"${expected.paramsHash}"`, `W/"${expected.paramsHash}"`, `"other", "${expected.paramsHash}"`]) {
-      const req = new Request(movementUrl(cfg.id, query(cfg.defaultParams)), { headers: { 'If-None-Match': inm } });
+      const versioned = movementUrl(cfg.id, query(cfg.defaultParams, `&v=${blastDataVersion(cfg)}`));
+      const req = new Request(versioned, { headers: { 'If-None-Match': inm } });
       const res = await getMovement(req, ctx(cfg.id));
       expect(res.status, inm).toBe(304);
       expect(res.headers.get('etag')).toBe(`"${expected.paramsHash}"`);
@@ -201,5 +202,42 @@ describe('?v= data version (stale clients after a deploy)', () => {
       ctx(other.id),
     );
     expect(res.status).toBe(409);
+  });
+
+  it('no v (curl, tools): 200 with the current data but a short policy, never immutable — model, movement and 304', async () => {
+    const SHORT = 'public, s-maxage=60';
+    const mv = await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams))), ctx(cfg.id));
+    expect(mv.status).toBe(200);
+    expect(mv.headers.get('cache-control')).toBe(SHORT);
+    const etag = mv.headers.get('etag')!;
+    const mv304 = await getMovement(
+      new Request(movementUrl(cfg.id, query(cfg.defaultParams)), { headers: { 'If-None-Match': etag } }),
+      ctx(cfg.id),
+    );
+    expect(mv304.status).toBe(304);
+    expect(mv304.headers.get('cache-control')).toBe(SHORT);
+    const model = await getModel(new Request(`${BASE}/${cfg.id}/model`), ctx(cfg.id));
+    expect(model.status).toBe(200);
+    expect(model.headers.get('cache-control')).toBe(SHORT);
+    const model304 = await getModel(
+      new Request(`${BASE}/${cfg.id}/model`, { headers: { 'If-None-Match': model.headers.get('etag')! } }),
+      ctx(cfg.id),
+    );
+    expect(model304.status).toBe(304);
+    expect(model304.headers.get('cache-control')).toBe(SHORT);
+  });
+
+  it('the current v → immutable on both binary routes (including a 304 revalidation)', async () => {
+    const IMMUTABLE = 'public, s-maxage=31536000, immutable';
+    const model = await getModel(new Request(`${BASE}/${cfg.id}/model?v=${current}`), ctx(cfg.id));
+    expect(model.headers.get('cache-control')).toBe(IMMUTABLE);
+    const model304 = await getModel(
+      new Request(`${BASE}/${cfg.id}/model?v=${current}`, { headers: { 'If-None-Match': model.headers.get('etag')! } }),
+      ctx(cfg.id),
+    );
+    expect(model304.status).toBe(304);
+    expect(model304.headers.get('cache-control')).toBe(IMMUTABLE);
+    const mv = await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams, `&v=${current}`))), ctx(cfg.id));
+    expect(mv.headers.get('cache-control')).toBe(IMMUTABLE);
   });
 });

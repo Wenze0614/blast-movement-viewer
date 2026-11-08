@@ -9,7 +9,7 @@ import { encodeModel } from '@/core/codec';
 import { buildBlastDetail, buildBlastSummary } from '@/core/holes';
 import type { BlastDetail, BlastSummary } from '@/core/api-types';
 import type { BlockModel } from '@/core/types';
-import { apiError } from './binary';
+import { apiError, CACHE } from './binary';
 
 interface Entry {
   model: BlockModel;
@@ -42,6 +42,15 @@ export function versionMismatch(cfg: BlastConfig, url: string): Response | null 
     requested: v,
     current,
   });
+}
+
+/**
+ * Cache-Control for a model / movement response that passed `versionMismatch`: `immutable` only
+ * when the URL's `v` is this blast's current data version (the URL then names its bytes for good);
+ * a request without `v` may be served different bytes after a deploy, so it gets a short policy.
+ */
+export function binaryCacheControl(cfg: BlastConfig, url: string): string {
+  return new URL(url).searchParams.get('v') === blastDataVersion(cfg) ? CACHE.immutable : CACHE.unversioned;
 }
 
 /** Model, detail and the encoded model payload for a known blast (memoised). */

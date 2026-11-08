@@ -6,8 +6,13 @@ import type { ApiError, ApiErrorCode } from '@/core/api-types';
 
 /** Cache policies from the §3.2 table. */
 export const CACHE = {
-  /** Deterministic payloads behind a versioned URL (model, movement). */
+  /** Deterministic payloads behind a URL whose `?v=` is the current data version (model, movement). */
   immutable: 'public, s-maxage=31536000, immutable',
+  /**
+   * Model / movement requested WITHOUT `?v=` (curl, tools): the URL names no data version, so the
+   * same URL serves different bytes after a deploy that changes the config. Short CDN lifetime.
+   */
+  unversioned: 'public, s-maxage=60',
   /** Blast list / detail: change only with a deploy. */
   hour: 'public, s-maxage=3600',
   none: 'no-store',

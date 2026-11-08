@@ -4,7 +4,7 @@
  * and the section slider (P3). Writes the store; the engine turns these into one aColor rewrite or
  * a uniform, never a geometry rebuild.
  */
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '@/state/hooks';
 import type { ColourMode, OutcomeLine, SectionState } from '@/state/store';
 import { sectionRange } from '@/state/views';
@@ -30,7 +30,8 @@ const AXES: readonly { value: SectionState['axis']; label: string; title: string
 export const SECTION_STEP = 0.25;
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
-const mid = ([lo, hi]: readonly [number, number]) => Math.round((lo + hi) / 2 / SECTION_STEP) * SECTION_STEP;
+/** Centre of a range, on the slider grid. */
+export const mid = ([lo, hi]: readonly [number, number]) => Math.round((lo + hi) / 2 / SECTION_STEP) * SECTION_STEP;
 /** Slider bounds: the drawn extent along the axis, widened to whole slider steps. */
 export function sliderBounds([lo, hi]: readonly [number, number]): [number, number] {
   return [Math.floor(lo / SECTION_STEP) * SECTION_STEP, Math.ceil(hi / SECTION_STEP) * SECTION_STEP];
@@ -92,9 +93,14 @@ export default function ViewControls() {
     if (p !== section.position) setSection({ position: p });
   }, [range, section.enabled, section.position, setSection]);
 
+  // Has the user placed the plane (slider)? Until then, enabling centres it in the current blast's
+  // range; afterwards a re-enable keeps their position (clamped into range by the effect above).
+  const userPositioned = useRef(false);
+
   const enableSection = (enabled: boolean) => {
     const inRange = range && section.position >= range[0] && section.position <= range[1];
-    setSection(enabled && range && !inRange ? { enabled, position: mid(range) } : { enabled });
+    const centre = enabled && range && (!userPositioned.current || !inRange);
+    setSection(centre ? { enabled, position: mid(range) } : { enabled });
   };
 
   return (
@@ -136,6 +142,7 @@ export default function ViewControls() {
           disabled={!section.enabled}
           onChange={(axis) => {
             const r = model ? sliderBounds(sectionRange(model, movement, axis)) : null;
+            userPositioned.current = false; // the old position means nothing on the other axis
             setSection(r ? { axis, position: mid(r) } : { axis });
           }}
         />
@@ -149,7 +156,10 @@ export default function ViewControls() {
             step={SECTION_STEP}
             value={section.position}
             disabled={!section.enabled || !range}
-            onChange={(e) => setSection({ position: Number(e.currentTarget.value) })}
+            onChange={(e) => {
+              userPositioned.current = true;
+              setSection({ position: Number(e.currentTarget.value) });
+            }}
           />
           <output className="w-20 text-right text-xs tabular-nums" aria-live="off">
             {section.axis} = {fmt(section.position, 1)} m

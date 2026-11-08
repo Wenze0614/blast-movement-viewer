@@ -25,11 +25,18 @@ import type { DataSourceKind } from '@/data';
 export type ColourMode = 'grade' | 'outcome' | 'movement';
 export type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 export type LayerKey = 'originalLine' | 'adjustedLine' | 'holes';
+/** Which dig line drives outcome colouring once the blast has started (P1). */
+export type OutcomeLine = 'original' | 'adjusted';
 
 export interface SectionState {
   enabled: boolean;
-  /** m along the section axis (mine grid). */
+  /** m along the section axis (mine grid, absolute world coordinate). */
   position: number;
+  /**
+   * 'y': the plane y = position (constant northing) hides everything south of it, so the cut
+   * face shows the E–W profile, i.e. the +x throw. 'x': the plane x = position hides everything
+   * east of it (a N–S profile). Both keep the side facing away from the default camera (SSE).
+   */
   axis: 'x' | 'y';
 }
 
@@ -63,6 +70,8 @@ export interface AppState {
 
   // ── View ─────────────────────────────────────────────────────────────────
   colourMode: ColourMode;
+  /** Outcome mode, after the blast: classify against this line. Before it: always the original. */
+  outcomeLine: OutcomeLine;
   layers: Record<LayerKey, boolean>;
   oreOnly: boolean;
   section: SectionState;
@@ -97,6 +106,7 @@ export interface AppActions {
   setDerived(polygons: DigPolygons | null, reconciliation: AppState['reconciliation']): void;
 
   setColourMode(mode: ColourMode): void;
+  setOutcomeLine(line: OutcomeLine): void;
   setLayer(layer: LayerKey, visible: boolean): void;
   toggleLayer(layer: LayerKey): void;
   setOreOnly(oreOnly: boolean): void;
@@ -133,6 +143,7 @@ export function initialAppState(): AppState {
     polygons: null,
     reconciliation: null,
     colourMode: 'grade',
+    outcomeLine: 'original',
     layers: { originalLine: true, adjustedLine: true, holes: true },
     oreOnly: false,
     section: { enabled: false, position: 0, axis: 'y' },
@@ -216,6 +227,7 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       setDerived: (polygons, reconciliation) => set({ polygons, reconciliation }),
 
       setColourMode: (colourMode) => set({ colourMode }),
+      setOutcomeLine: (outcomeLine) => set({ outcomeLine }),
       setLayer: (layer, visible) => set({ layers: { ...get().layers, [layer]: visible } }),
       toggleLayer: (layer) => set({ layers: { ...get().layers, [layer]: !get().layers[layer] } }),
       setOreOnly: (oreOnly) => set({ oreOnly }),

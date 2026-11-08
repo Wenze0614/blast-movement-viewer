@@ -20,13 +20,25 @@
  *
  * Blast detail ↔ model (P9): the hole layer draws `store.blast.holes`, whose sampled grades are
  * derived from the model. The detail and the model are separate calls with per-call fallback, so
- * an API detail (no `?v=` on that route) could sit over a local model after a deploy. Whenever a
- * model from local compute is stored, the detail is rebuilt from that model and the local config
- * (`buildBlastDetail`), so the holes always come from the same source as the model.
+ * they can come from different sources and configs: an API detail over a local model after a
+ * deploy, or a local detail (the detail call fell back) over an API model, or a local detail left
+ * over when recovery replaces a local model with an API model. Before ANY model is stored, from
+ * either source, the pipeline makes sure `store.blast` was built for it (`detailFor`):
+ *   1. the current detail already matches the model → kept (no write, no hole-layer rebuild);
+ *   2. the model has the bundled config's configHash → the detail is built locally from that
+ *      config and the model (deterministic, so identical to what the API would serve);
+ *   3. otherwise (an API model from a deploy with another config) the detail is fetched from the
+ *      data source and used if it matches the model;
+ *   4. last resort: the holes are re-sampled from the model with the detail's own pattern, so the
+ *      layer never shows grades from a model that isn't on screen.
+ * "Matches" is checked, not assumed: `generateHoles(model, detail.pattern, detail.freeFace)` must
+ * reproduce `detail.holes`. Params are never touched (no setBlast). `isCurrent()` is checked after
+ * the fetch, and the detail and the model are written together only while the request is current.
  */
-import type { BlastDetail } from '@/core/api-types';
+import type { BlastDetail, BlastHole } from '@/core/api-types';
 import { getBlastConfig } from '@/core/blasts';
-import { buildBlastDetail } from '@/core/holes';
+import { blockModelConfigHash } from '@/core/blockModel';
+import { buildBlastDetail, generateHoles } from '@/core/holes';
 import { isMovementFor } from '@/core/movement';
 import type { BlockModel } from '@/core/types';
 import { isAbortError, LocalDataSource, type DataSource, type DataSourceKind } from '@/data';
@@ -39,14 +51,22 @@ export interface DataPipeline {
   dispose(): void;
 }
 
-/** Same pattern and holes (the parts the hole layer draws)? */
-function sameHoles(a: BlastDetail, b: BlastDetail): boolean {
-  if (a.holes.length !== b.holes.length) return false;
+/** Same holes (positions and sampled grades: the parts the hole layer draws)? */
+function sameHoles(a: readonly BlastHole[], b: readonly BlastHole[]): boolean {
+  if (a.length !== b.length) return false;
   const same3 = (p: readonly number[], q: readonly number[]) => p[0] === q[0] && p[1] === q[1] && p[2] === q[2];
-  return a.holes.every((h, i) => {
-    const o = b.holes[i];
+  return a.every((h, i) => {
+    const o = b[i];
     return h.id === o.id && h.sampledGrade === o.sampledGrade && same3(h.collar, o.collar) && same3(h.toe, o.toe);
   });
+}
+
+/** Was `detail` built for `model`? Its holes must be exactly what the model gives for its pattern. */
+export function detailMatchesModel(detail: BlastDetail, model: BlockModel): boolean {
+  return (
+    detail.blockCount === model.count &&
+    sameHoles(detail.holes, generateHoles(model, detail.pattern, detail.freeFace))
+  );
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -75,18 +95,54 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
   };
 
   /**
-   * Store a model and keep the blast detail on the same source: a local model gets the detail
-   * built from it (only written when its holes differ, so the hole layer doesn't rebuild for
-   * nothing). Not setBlast(): that would reset params to the detail's defaults.
+   * The blast detail built for `model` (see "Blast detail ↔ model" above), or `null` when this
+   * request was superseded while fetching. Returns the store's current detail when it already
+   * matches, so the caller can skip the write.
    */
-  function applyModel(blastId: string, model: BlockModel, kind: DataSourceKind): void {
-    store.getState().setModel(model, kind);
-    if (kind !== 'local') return;
-    const cfg = getBlastConfig(blastId);
+  async function detailFor(blastId: string, model: BlockModel, isCurrent: () => boolean): Promise<BlastDetail | null> {
     const current = store.getState().blast;
-    if (!cfg || !current || current.id !== blastId) return;
-    const detail = buildBlastDetail(cfg, model);
-    if (!sameHoles(current, detail)) store.setState({ blast: detail });
+    if (current?.id === blastId && detailMatchesModel(current, model)) return current;
+    const cfg = getBlastConfig(blastId);
+    if (cfg && blockModelConfigHash(cfg) === model.configHash) return buildBlastDetail(cfg, model);
+    // A model from a source with another config (the API on a newer deploy): ask for its detail.
+    let fetched: BlastDetail | null = null;
+    try {
+      fetched = await data.getBlast(blastId);
+    } catch (err) {
+      if (isAbortError(err)) return null;
+      console.warn('[bmv] could not fetch the blast detail for the API model; re-sampling holes locally.', err);
+    }
+    if (!isCurrent()) return null;
+    if (fetched && fetched.id === blastId && detailMatchesModel(fetched, model)) return fetched;
+    const base = fetched?.id === blastId ? fetched : current?.id === blastId ? current : cfg ? buildBlastDetail(cfg, model) : null;
+    if (!base) return current;
+    console.warn(`[bmv] no blast detail matches model ${model.configHash}; re-sampling holes from it.`);
+    return {
+      ...base,
+      blockCount: model.count,
+      grid: { ...model.grid, origin: [...model.grid.origin], blockSize: [...model.grid.blockSize] },
+      grades: { ...model.grades },
+      holes: generateHoles(model, base.pattern, base.freeFace),
+    };
+  }
+
+  /**
+   * Store a model (from either source) together with the blast detail built for it. Returns false
+   * (and writes nothing) if the request was superseded meanwhile. The detail is written only when
+   * it changed, so the hole layer doesn't rebuild for nothing. Not setBlast(): that would reset
+   * params to the detail's defaults.
+   */
+  async function applyModel(
+    blastId: string,
+    model: BlockModel,
+    kind: DataSourceKind,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    const detail = await detailFor(blastId, model, isCurrent);
+    if (!isCurrent()) return false;
+    if (detail && detail !== store.getState().blast) store.setState({ blast: detail });
+    store.getState().setModel(model, kind);
+    return true;
   }
 
   /** `resync`: may this load reload the model once if the movement doesn't belong to it? */
@@ -114,7 +170,7 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
         console.warn(`[bmv] ${detail}; reloading a consistent model + movement.`);
         const fresh = await data.getModel(blastId, ctrl.signal);
         if (!isCurrent()) return;
-        if (fresh !== model) applyModel(blastId, fresh, data.kind);
+        if (fresh !== model && !(await applyModel(blastId, fresh, data.kind, isCurrent))) return;
         return await loadMovement(false);
       }
       store.getState().setMovement(movement, data.kind, now() - t0);
@@ -172,7 +228,7 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
       store.getState().setBlast(detail);
       const model = await data.getModel(id, ctrl.signal);
       if (!isCurrent()) return;
-      applyModel(id, model, data.kind);
+      if (!(await applyModel(id, model, data.kind, isCurrent))) return;
       await loadMovement(); // reports its own errors, guarded by its own staleness check
     } catch (err) {
       fail(err, isCurrent);

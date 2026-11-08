@@ -12,7 +12,7 @@ import { buildBlastDetail, buildBlastSummary } from '@/core/holes';
 import { computeMovement, isMovementFor } from '@/core/movement';
 import type { BlastParameters, BlockModel } from '@/core/types';
 import { FallbackDataSource, LocalDataSource, type DataSource } from '@/data';
-import { startDataPipeline } from '@/state/pipeline';
+import { detailMatchesModel, startDataPipeline } from '@/state/pipeline';
 import { createAppStore, type AppStore } from '@/state/store';
 
 const cfgA = getBlastConfig('b1040-017')!;
@@ -112,6 +112,9 @@ describe('model–movement binding across fallback + API recovery', () => {
     expect(api.calls.movement).toBe(2); // the mismatched one + the one for the reloaded model
     expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/does not belong to model/));
     expect(s.reconciliation).not.toBeNull(); // derived from the consistent pair
+    // Recovery replaced the local model with the API model: the local detail went with it.
+    expect(s.blast).toEqual(buildBlastDetail({ ...cfgA, seed: cfgA.seed + 1 }, api.modelB));
+    expect(detailMatchesModel(s.blast!, s.model!)).toBe(true);
     watch.unsub();
     pipeline.dispose();
   });
@@ -130,6 +133,8 @@ describe('model–movement binding across fallback + API recovery', () => {
     expect(s.model!.count).toBe(api.modelB.count);
     expect(s.movement!.delay.length).toBe(s.model!.count);
     expect(s.status).toBe('ready');
+    expect(s.blast!.blockCount).toBe(s.model!.count);
+    expect(detailMatchesModel(s.blast!, s.model!)).toBe(true);
     watch.unsub();
     pipeline.dispose();
   });
@@ -310,6 +315,91 @@ describe('blast detail ↔ model source (P9 hole layer)', () => {
     const pipeline = startDataPipeline(store, new LocalDataSource());
     await pipeline.settled;
     expect(blasts).toHaveLength(1); // setBlast only
+    pipeline.dispose();
+  });
+
+  /** API on a changed config (B) whose detail call fails `detailFailures` times; model + movement succeed. */
+  function modelOnlyApi(cfgB: BlastConfig, detailFailures: number) {
+    const api = fakeApi(cfgB);
+    api.up = true;
+    let failures = detailFailures;
+    const getBlast = api.getBlast;
+    api.getBlast = async () => {
+      if (failures-- > 0) throw new TypeError('fetch failed');
+      return getBlast();
+    };
+    return api;
+  }
+
+  it('a local detail (detail call fell back) over an API model with a changed config is replaced by the API model\'s detail', async () => {
+    const cfgB = { ...cfgA, seed: cfgA.seed + 1 };
+    const api = modelOnlyApi(cfgB, 1); // only the first detail call fails
+    const localDetail = await new LocalDataSource().getBlast(cfgA.id);
+
+    const store = createAppStore();
+    const watch = watchPairs(store);
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
+    await pipeline.settled;
+    let s = store.getState();
+    expect(s.source).toBe('api');
+    expect(s.model).toBe(api.modelB);
+    expect(s.blast).not.toEqual(localDetail);
+    expect(s.blast).toEqual(buildBlastDetail(cfgB, api.modelB));
+    expect(detailMatchesModel(s.blast!, s.model!)).toBe(true);
+    expect(s.status).toBe('ready');
+
+    store.getState().setParams({ maxThrow: 12 });
+    await pipeline.settled;
+    s = store.getState();
+    expect(s.blast).toEqual(buildBlastDetail(cfgB, api.modelB));
+    expect(s.params.maxThrow).toBe(12); // user params kept
+    expect(watch.violations).toEqual([]);
+    watch.unsub();
+    pipeline.dispose();
+  });
+
+  it('API model whose detail never arrives: holes are re-sampled from the API model, never left on the local one', async () => {
+    const cfgB = { ...cfgA, seed: cfgA.seed + 1 };
+    const api = modelOnlyApi(cfgB, Infinity);
+    const store = createAppStore();
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
+    await pipeline.settled;
+    const s = store.getState();
+    expect(s.model).toBe(api.modelB);
+    expect(detailMatchesModel(s.blast!, s.model!)).toBe(true);
+    expect(s.blast!.holes).toEqual(buildBlastDetail(cfgB, api.modelB).holes); // same pattern in A and B
+    expect(s.status).toBe('ready');
+    pipeline.dispose();
+  });
+
+  it('a request superseded while fetching the detail writes neither detail nor model', async () => {
+    const cfgB = { ...cfgA, seed: cfgA.seed + 1 };
+    const api = fakeApi(cfgB);
+    api.up = true;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const getBlast = api.getBlast;
+    api.getBlast = async () => {
+      if (++calls === 1) throw new TypeError('fetch failed'); // initial detail falls back to local
+      await gate; // the detail fetch for the API model is held
+      return getBlast();
+    };
+    const store = createAppStore();
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(store.getState().model).toBeNull(); // not stored before its detail is resolved
+    api.up = false; // the other blast loads from local compute
+    store.getState().setBlastId('b1040-031'); // supersedes the held load
+    release();
+    await pipeline.settled;
+    const s = store.getState();
+    expect(s.blastId).toBe('b1040-031');
+    expect(s.blast!.id).toBe('b1040-031');
+    expect(s.model).not.toBe(api.modelB);
+    expect(s.model!.configHash).toBe(generateBlockModel(getBlastConfig('b1040-031')!).configHash);
+    expect(detailMatchesModel(s.blast!, s.model!)).toBe(true);
+    expect(s.status).toBe('ready');
     pipeline.dispose();
   });
 });

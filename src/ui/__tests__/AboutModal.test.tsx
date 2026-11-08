@@ -3,15 +3,18 @@
  * P7 About modal (opens from the panel header, Esc closes, focus returns, framing + disclaimers)
  * and the P9 holes layer toggle.
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appStore, initialAppState } from '@/state/store';
 import AboutButton, { FRAMING } from '../AboutModal';
 import LayerToggles, { HOLES_NOTE } from '../LayerToggles';
 import Panel from '../Panel';
 
 beforeEach(() => appStore.setState(initialAppState()));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const dialog = () => document.querySelector('dialog')!;
 
@@ -55,26 +58,50 @@ describe('AboutModal (P7)', () => {
     expect(d.contains(document.activeElement)).toBe(true); // Close button (autoFocus)
   });
 
-  it('Esc closes and focus returns to the About button', () => {
+  /** Records whether the dialog was still open each time the opener was focused. */
+  function trackFocus(opener: HTMLElement) {
+    const dialogOpenAtFocus: boolean[] = [];
+    const focus = HTMLElement.prototype.focus;
+    vi.spyOn(opener, 'focus').mockImplementation(function (this: HTMLElement, ...args) {
+      dialogOpenAtFocus.push(dialog().open);
+      focus.apply(this, args);
+    });
+    return dialogOpenAtFocus;
+  }
+
+  it('Esc closes and focus returns to the About button after the dialog has closed', async () => {
     render(<AboutButton />);
     const opener = screen.getByRole('button', { name: 'About' });
     opener.focus();
     fireEvent.click(opener);
     expect(dialog().open).toBe(true);
+    const focusCalls = trackFocus(opener);
     fireEvent.keyDown(dialog(), { key: 'Escape' });
     expect(dialog().open).toBe(false);
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(focusCalls).toEqual([false]); // focused once, from the `close` event, never while modal
   });
 
-  it('the Close button closes and returns focus too; it can be reopened', () => {
+  it('the Close button closes and returns focus too (after closing); it can be reopened', async () => {
     render(<AboutButton />);
     const opener = screen.getByRole('button', { name: 'About' });
     fireEvent.click(opener);
+    const focusCalls = trackFocus(opener);
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(dialog().open).toBe(false);
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(focusCalls).toEqual([false]);
     fireEvent.click(opener);
     expect(dialog().open).toBe(true);
+  });
+
+  it('the dialog `close` event on its own triggers the focus restore', async () => {
+    render(<AboutButton />);
+    const opener = screen.getByRole('button', { name: 'About' });
+    fireEvent.click(opener);
+    const focusCalls = trackFocus(opener);
+    fireEvent(dialog(), new Event('close')); // e.g. a browser closing the dialog itself
+    expect(focusCalls).toHaveLength(1); // the handler ran (the element itself was not closed here)
   });
 });
 

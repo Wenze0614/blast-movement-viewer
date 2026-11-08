@@ -2,11 +2,13 @@
 /**
  * About (P7): what the app is, the framing sentence (docs/02-plan.md line 7, verbatim), what it is
  * not, and links. A native <dialog> opened with showModal(): the browser makes the rest of the
- * page inert (focus stays inside) and Esc fires `cancel`. Esc is also handled on keydown and the
- * opener gets focus back explicitly, so the behaviour doesn't depend on the browser (or the test
- * DOM) implementing all of that. Neutral styling; no company names, logos or colours.
+ * page inert (focus stays inside) and Esc fires `cancel`. Esc is also handled on keydown, so the
+ * behaviour doesn't depend on the browser (or the test DOM) implementing all of that. The opener
+ * gets focus back in the dialog's `close` event (`onClosed`), i.e. AFTER the dialog has closed:
+ * while a modal dialog is open the rest of the page is inert, so focusing the opener earlier is
+ * ignored by real browsers. Neutral styling; no company names, logos or colours.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export const REPO_URL = 'https://github.com/Wenze0614/blast-movement-viewer';
 export const AUTHOR = 'Wenze Zhang';
@@ -27,10 +29,13 @@ export const WHAT_THIS_IS_NOT: readonly string[] = [
 
 interface AboutModalProps {
   open: boolean;
+  /** The user asked to close (Esc, Close button, backdrop): set `open` to false. */
   onClose(): void;
+  /** The dialog has closed (its `close` event): restore focus here. */
+  onClosed?(): void;
 }
 
-export function AboutModal({ open, onClose }: AboutModalProps) {
+export function AboutModal({ open, onClose, onClosed }: AboutModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -40,16 +45,20 @@ export function AboutModal({ open, onClose }: AboutModalProps) {
       if (typeof d.showModal === 'function') d.showModal();
       else d.setAttribute('open', '');
     } else if (!open && d.open) {
-      if (typeof d.close === 'function') d.close();
-      else d.removeAttribute('open');
+      if (typeof d.close === 'function') d.close(); // fires `close` → onClosed
+      else {
+        d.removeAttribute('open'); // no dialog API: no `close` event either
+        onClosed?.();
+      }
     }
-  }, [open]);
+  }, [open, onClosed]);
 
   return (
     <dialog
       ref={ref}
       aria-labelledby="about-title"
       className="m-auto max-h-[85vh] w-[min(36rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-border bg-surface p-5 text-sm text-foreground shadow-xl backdrop:bg-black/60"
+      onClose={() => onClosed?.()}
       onCancel={(e) => {
         e.preventDefault(); // we close through state, so React and the element stay in sync
         onClose();
@@ -111,14 +120,12 @@ export function AboutModal({ open, onClose }: AboutModalProps) {
   );
 }
 
-/** Panel-header button + modal; focus returns to the button when the modal closes. */
+/** Panel-header button + modal; focus returns to the button once the dialog has closed. */
 export default function AboutButton() {
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
-  const close = () => {
-    setOpen(false);
-    opener.current?.focus();
-  };
+  const close = useCallback(() => setOpen(false), []);
+  const restoreFocus = useCallback(() => opener.current?.focus(), []);
   return (
     <>
       <button
@@ -130,7 +137,7 @@ export default function AboutButton() {
       >
         About
       </button>
-      <AboutModal open={open} onClose={close} />
+      <AboutModal open={open} onClose={close} onClosed={restoreFocus} />
     </>
   );
 }

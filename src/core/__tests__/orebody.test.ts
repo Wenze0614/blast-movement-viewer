@@ -8,7 +8,7 @@ import { blockIdAt, completeGrades, generateBlockModel } from '../blockModel';
 import { DEFAULT_GRADE_SETTINGS } from '../defaults';
 import { createSeededNoise3D } from '../rng';
 import { traceDistance, VEIN_PINCH_OUT, veinContribution, type VeinFeature, type VeinNoise } from '../orebody';
-import { OreClass } from '../types';
+import { OreClass, type GradeSettings } from '../types';
 
 const vein: VeinFeature = {
   kind: 'vein',
@@ -140,7 +140,7 @@ describe('demo vein systems', () => {
 
 describe('completeGrades', () => {
   it('fills a missing mediumGrade (a detail cached before four classes) and keeps the breaks ordered', () => {
-    const old: Partial<typeof DEFAULT_GRADE_SETTINGS> = { ...DEFAULT_GRADE_SETTINGS };
+    const old: Partial<GradeSettings> = { ...DEFAULT_GRADE_SETTINGS };
     delete old.mediumGrade;
     expect(completeGrades(old)).toEqual(DEFAULT_GRADE_SETTINGS);
     expect(completeGrades(undefined)).toEqual(DEFAULT_GRADE_SETTINGS);

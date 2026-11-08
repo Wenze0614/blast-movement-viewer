@@ -209,7 +209,7 @@ Coordinates are mine-grid metres: x = East, y = North, z = elevation. Bench loca
 ```
 - Desktop-first with a 360 px panel; stacks below 900 px.
 - A small **data-source badge** ("● API · 38 ms" / "● local") quietly shows the full-stack plumbing.
-- Grade palette: waste `#8b9099`, low `#e3a72f`, high `#b3134a`.
+- Grade palette (four classes): waste `#8b9099`, then a warm sequential ramp: low `#f0c75e`, medium `#e07a2b`, high `#b3134a`.
 - Outcome palette: ore→mill `#14b8a6`, ore lost `#d946ef`, dilution `#f97316`, waste→waste dim grey.
 - No red/green pairing. Your own fonts and accent.
 

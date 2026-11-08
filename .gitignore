@@ -8,3 +8,6 @@ coverage/
 next-env.d.ts
 .DS_Store
 .polly/
+/build
+*.pem
+npm-debug.log*

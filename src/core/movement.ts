@@ -15,9 +15,10 @@
  * 2. Swell + re-grid: k = swell^(1/3); post-blast plan grid of cell c′ = c·k from the back of the
  *    box to past the throw; bin each target. Rock can only land on free ground: inside the blast
  *    footprint or on the (bounded) open floor in front of the face. A cell is valid only if the
- *    WHOLE swollen block footprint (the cell square) is free, so no settled block overlaps rock
- *    or the pit terrain's walls. A target on an invalid cell slides laterally back toward the
- *    block's own strip, then along the throw (forward, else back) to the nearest valid cell.
+ *    WHOLE swollen block footprint (the cell square) is free, and a block may take a cell only if
+ *    its animated box stays over free ground (within the terrain's floor margin) all the way
+ *    there (footprint.pathIsFree), so no block meets rock or the pit terrain, settled or in
+ *    flight. Otherwise it takes the nearest such cell to its target (then to its own position).
  * 3. Stacking: per cell, sort by original z (ties: front first), z_n = z_toe + (n + ½)·H_b·k.
  * 4. Angle-of-repose relaxation: move the top block of the tallest offending cell to its lowest
  *    valid neighbour until stable or 20·N moves (see `allowedDrop` for the lattice criterion).
@@ -28,7 +29,7 @@
  */
 import type { NoiseFunction3D } from 'simplex-noise';
 import { canonicalParams, hashParams } from './hash';
-import { modelFootprint } from './footprint';
+import { floorMargin, modelFootprint } from './footprint';
 import { createSeededNoise3D, deriveSeed } from './rng';
 import type { BlastParameters, BlockModel, GridSpec, Heightfield, MovementResult } from './types';
 
@@ -57,7 +58,15 @@ export interface MovementStats {
   stackCount: Uint16Array;
   /** m, stacked block height H_b·k. */
   stackHeight: number;
+  /**
+   * Blocks whose destination could not be reached by a free path (outline too thin for a swollen
+   * block to pass); they keep the nearest valid cell. 0 for the demo blasts at any parameters.
+   */
+  pathFallbacks: number;
 }
+
+/** Cells (Chebyshev) searched around a blocked target for a reachable destination. */
+export const REACH_SEARCH_CELLS = 10;
 
 /**
  * Max allowed stack-height drop, in blocks, over a baseline of `d` cells along a grid axis.
@@ -175,6 +184,39 @@ export function computeMovementDetailed(
   const rb = params.backRowRatio;
   const rt = params.toeRatio;
 
+  // A block's animated box: half-extents (ca, cb)/2 growing by k, centre from its start to the cell
+  // centre. It must stay within the terrain's floor margin of free ground (see pathIsFree).
+  const tol = floorMargin(grid);
+  const startA = new Float64Array(N);
+  const startB = new Float64Array(N);
+  const reachable = (n: number, cl: number): boolean => {
+    const ia = cl % nA;
+    const ib = (cl - ia) / nA;
+    return fp.pathIsFree(startA[n], startB[n], (ia + 0.5) * cell, (ib - mLat + 0.5) * cell, ca / 2, cb / 2, k, tol);
+  };
+  /** Nearest valid, reachable cell to (ia, ib) within REACH_SEARCH_CELLS, or -1. Deterministic. */
+  const nearestReachable = (n: number, ia: number, ib: number): number => {
+    for (let r = 0; r <= REACH_SEARCH_CELLS; r++) {
+      let best = -1;
+      let bestD = Infinity;
+      for (let jb = ib - r; jb <= ib + r; jb++) {
+        if (jb < 0 || jb >= nB) continue;
+        for (let ja = ia - r; ja <= ia + r; ja++) {
+          if (ja < 0 || ja >= nA || Math.max(Math.abs(ja - ia), Math.abs(jb - ib)) !== r) continue;
+          const cl = lc(ja, jb);
+          const d = (ja - ia) ** 2 + (jb - ib) ** 2;
+          if (d < bestD && valid[cl] && reachable(n, cl)) {
+            best = cl;
+            bestD = d;
+          }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return -1;
+  };
+  let pathFallbacks = 0;
+
   const cellOf = new Int32Array(N);
   // Unique per block: (flitch, row from front, lateral index) over the dense bounding grid.
   const gridCount = nAlong * nLat * grid.nz;
@@ -190,6 +232,8 @@ export function computeMovementDetailed(
     const y = c[3 * n + 1];
     const z = c[3 * n + 2];
     const [a, b] = frame.toLocal(x, y);
+    startA[n] = a;
+    startB[n] = b;
     const s = Math.min(1, Math.max(0, (fp.faceLine(b) - a) / depth)); // 0 at the face, 1 at the back
     const h = (z - zToe) / H;
     const qx = x / len; // noise-space coordinates
@@ -208,6 +252,16 @@ export function computeMovementDetailed(
     const tb = Math.min(bMax, Math.max(bMin, b + L));
     let ia = Math.floor(ta / cell);
     let ib = Math.floor(tb / cell) + mLat;
+    const wanted = lc(ia, ib);
+    if (!valid[wanted] || !reachable(n, wanted)) {
+      // Blocked: the nearest reachable cell to the target, else to the block's own position.
+      let pick = nearestReachable(n, ia, ib);
+      if (pick < 0) pick = nearestReachable(n, Math.min(nA - 1, Math.floor(a / cell)), Math.min(nB - 1, Math.max(0, Math.floor(b / cell) + mLat)));
+      if (pick >= 0) {
+        ia = pick % nA;
+        ib = (pick - ia) / nA;
+      }
+    }
     if (!valid[lc(ia, ib)]) {
       // Target not on free ground: slide back toward the block's own strip, then along the throw,
       // forward first (its face and the open floor are ahead), else back (past the open floor).
@@ -223,6 +277,7 @@ export function computeMovementDetailed(
       if (!valid[lc(ja, ib)]) throw new Error(`computeMovement: no free ground in post-grid row ${ib}`);
       ia = ja;
     }
+    if (!reachable(n, lc(ia, ib))) pathFallbacks++;
     cellOf[n] = lc(ia, ib);
 
     // rank: lower flitch first, then front row first, then lateral index
@@ -268,12 +323,24 @@ export function computeMovementDetailed(
   const pushCell = (cl: number) => heap.push(height[cl] * nCells + (nCells - 1 - cl));
   for (let cl = 0; cl < nCells; cl++) if (valid[cl] && height[cl] >= 2) pushCell(cl);
 
+  /**
+   * The cell the stack in `cl` should shed a block to, or -1. Sets `moverIdx` to the stack index of
+   * the block that moves: the highest one with a free path there (usually the top one; final
+   * stacks are re-sorted by original elevation, so which block moves never breaks vertical order).
+   */
+  let moverIdx = -1;
+  const highestReachable = (cl: number, target: number): number => {
+    const st = stacks[cl];
+    for (let i = st.length - 1; i >= 0; i--) if (reachable(st[i], target)) return i;
+    return -1;
+  };
   const findTarget = (cl: number): number => {
     const hgt = height[cl];
     if (hgt < 2) return -1;
     const ia = cl % nA;
     const ib = (cl - ia) / nA;
     let best = -1;
+    let bestIdx = -1;
     let bestH = Infinity;
     let bestD = Infinity;
     for (const [da, db] of DIRS) {
@@ -285,12 +352,16 @@ export function computeMovementDetailed(
         if (!valid[nb]) break; // can't see past a wall
         const hn = height[nb];
         if (hgt - hn > allowed[d] && (hn < bestH || (hn === bestH && d < bestD))) {
+          const idx = highestReachable(cl, nb);
+          if (idx < 0) continue;
           best = nb;
+          bestIdx = idx;
           bestH = hn;
           bestD = d;
         }
       }
     }
+    moverIdx = bestIdx;
     return best;
   };
 
@@ -303,7 +374,7 @@ export function computeMovementDetailed(
     if (height[cl] !== hgt) continue; // stale entry
     const target = findTarget(cl);
     if (target < 0) continue;
-    stacks[target].push(stacks[cl].pop() as number);
+    stacks[target].push(stacks[cl].splice(moverIdx, 1)[0]);
     height[cl]--;
     height[target]++;
     moves++;
@@ -383,7 +454,7 @@ export function computeMovementDetailed(
   };
   return {
     result,
-    stats: { relaxationMoves: moves, converged, validMask, stackCount, stackHeight: hb },
+    stats: { relaxationMoves: moves, converged, validMask, stackCount, stackHeight: hb, pathFallbacks },
   };
 }
 

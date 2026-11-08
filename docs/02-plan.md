@@ -234,11 +234,11 @@ export interface DataSource {
 - **Choice:** (b): zero config, your familiar pattern, zod by hand. Switch to (c) only if the route count grows. The API is a **thin BFF over the movement "engine"**: it lists demo blasts, serves block models and computes movement on demand from the seeded configs. No proprietary data.
 - **Demo data** (`core/blasts.ts`, shared by local and API):
 
-  | id | Name | Model | Purpose |
+  | id | Name | Bounding grid (cells) → blocks inside the outline | Purpose |
   |---|---|---|---|
-  | `b1040-017` | Bench 1040 · Blast 017 | 40×24×4 @ 2.5 m (3,840), single dipping lens | Default story |
-  | `b1030-022` | Bench 1030 · Blast 022 | 40×24×4 @ 2.5 m, two pods with a waste parting | Shows it generalises |
-  | `b1040-031` | Bench 1040 · Blast 031 (dense) | 80×48×8 @ 1.25 m (30,720) | Performance |
+  | `b1040-017` | Bench 1040 · Blast 017 | 40×24×4 @ 2.5 m (3,840) → 3,200, ragged face, single dipping lens | Default story |
+  | `b1030-022` | Bench 1030 · Blast 022 | 40×24×4 @ 2.5 m (3,840) → 3,088, L-shape, two pods with a waste parting | Shows it generalises |
+  | `b1040-031` | Bench 1040 · Blast 031 (dense) | 80×48×8 @ 1.25 m (30,720) → 27,088, notched | Performance |
 
 - **Sketch:**
   ```ts

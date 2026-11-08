@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { BLAST_CONFIGS, getBlastConfig } from '../blasts';
 import { generateBlockModel } from '../blockModel';
 import { createFootprint, modelColumnMask } from '../footprint';
-import { computeMovement } from '../movement';
+import { computeMovement, computeMovementDetailed } from '../movement';
 import { BERM_WIDTH, buildPitTerrain, FACE_ANGLE_DEG, FLOOR_WIDTH, type PitTerrain } from '../terrain';
 import type { BlastParameters, BlockModel } from '../types';
 
@@ -49,7 +49,7 @@ function surfaceAt(t: PitTerrain, x: number, y: number): number {
  * lie at grid vertices inside the box or on the box boundary: both are sampled (boundary every
  * spacing/16, finer than any triangle edge crossing matters for a 1e-3 m tolerance).
  */
-function surfaceRange(t: PitTerrain, x0: number, y0: number, x1: number, y1: number): [number, number] {
+function surfaceRange(t: PitTerrain, x0: number, y0: number, x1: number, y1: number, perCell = 16): [number, number] {
   let lo = Infinity;
   let hi = -Infinity;
   const take = (h: number) => {
@@ -59,7 +59,7 @@ function surfaceRange(t: PitTerrain, x0: number, y0: number, x1: number, y1: num
   for (let iy = Math.ceil((y0 - t.origin[1]) / t.spacing); t.origin[1] + iy * t.spacing <= y1; iy++)
     for (let ix = Math.ceil((x0 - t.origin[0]) / t.spacing); t.origin[0] + ix * t.spacing <= x1; ix++)
       take(t.height[ix + t.nx * iy]);
-  const step = t.spacing / 16;
+  const step = t.spacing / perCell;
   for (let x = x0; x <= x1 + 1e-9; x += step) {
     take(surfaceAt(t, x, y0));
     take(surfaceAt(t, x, y1));
@@ -168,6 +168,37 @@ describe('buildPitTerrain', () => {
         expect(hi, `${c.id} block ${n} at ${x.toFixed(2)},${y.toFixed(2)}`).toBeLessThanOrEqual(z0 + 1e-3);
         expect(lo, `${c.id} block ${n} at ${x.toFixed(2)},${y.toFixed(2)}`).toBeGreaterThanOrEqual(z0 - 0.16);
         expect(t.mask[vertexAt(t, x, y)], `${c.id} block ${n} outside the survey`).toBe(1);
+      }
+    }
+  });
+
+  it.each(EXTREMES)('no block meets the terrain in flight: animated boxes clear it at every progress (%s)', (_name, over) => {
+    for (const c of BLAST_CONFIGS) {
+      const m = generateBlockModel(c);
+      const params = { ...c.defaultParams, ...over };
+      const t = buildPitTerrain(m, params.freeFace);
+      const { result: mv, stats } = computeMovementDetailed(m, params);
+      expect(stats.pathFallbacks, c.id).toBe(0);
+      const [bx, by, bz] = c.grid.blockSize;
+      const k = mv.looseScale;
+      for (let n = 0; n < m.count; n++) {
+        const o = 3 * n;
+        if (mv.start[o] === mv.end[o] && mv.start[o + 1] === mv.end[o + 1]) continue;
+        // Eased progress s: centre and size are linear in s (core/easing.ts). The throw arc only
+        // lifts the block, so leaving it out is the stricter test.
+        for (let q = 1; q < 20; q++) {
+          const sv = q / 20;
+          const g = 1 + (k - 1) * sv;
+          const x = mv.start[o] + (mv.end[o] - mv.start[o]) * sv;
+          const y = mv.start[o + 1] + (mv.end[o + 1] - mv.start[o + 1]) * sv;
+          const bottom = mv.start[o + 2] + (mv.end[o + 2] - mv.start[o + 2]) * sv - (bz / 2) * g;
+          const hx = (bx / 2) * g - 1e-3;
+          const hy = (by / 2) * g - 1e-3;
+          const [, hi] = surfaceRange(t, x - hx, y - hy, x + hx, y + hy, 4);
+          if (hi > bottom + 1e-3) {
+            expect.fail(`${c.id} block ${n} at s=${sv}: terrain ${hi.toFixed(2)} above box bottom ${bottom.toFixed(2)} at ${x.toFixed(2)},${y.toFixed(2)}`);
+          }
+        }
       }
     }
   });

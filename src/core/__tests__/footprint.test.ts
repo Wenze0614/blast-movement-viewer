@@ -86,10 +86,11 @@ describe('createFootprint', () => {
     expect(fp.isOpen(10, 7)).toBe(true);
   });
 
-  it('the open floor is bounded: FLOOR_WIDTH past the frontmost face, SIDE_OPEN beyond the sides', () => {
-    expect([fp.openEnd, fp.openLatMin, fp.openLatMax]).toEqual([10 + FLOOR_WIDTH, -SIDE_OPEN, 6 + SIDE_OPEN]);
-    expect(fp.isOpen(10 + FLOOR_WIDTH - 0.01, 3)).toBe(true);
-    expect(fp.isOpen(10 + FLOOR_WIDTH, 3)).toBe(false);
+  it('the open floor is bounded: FLOOR_WIDTH past the frontmost face, SIDE_OPEN beyond the sides (whole blocks)', () => {
+    const depth = Math.ceil(FLOOR_WIDTH / 2) * 2; // 2 m blocks: 45 → 46 m, so the edge is a block boundary
+    expect([fp.openEnd, fp.openLatMin, fp.openLatMax]).toEqual([10 + depth, -SIDE_OPEN, 6 + SIDE_OPEN]);
+    expect(fp.isOpen(10 + depth - 0.01, 3)).toBe(true);
+    expect(fp.isOpen(10 + depth, 3)).toBe(false);
     expect(fp.isOpen(20, -SIDE_OPEN)).toBe(true);
     expect(fp.isOpen(20, -SIDE_OPEN - 0.01)).toBe(false);
     expect(fp.isOpen(20, 6 + SIDE_OPEN)).toBe(false);

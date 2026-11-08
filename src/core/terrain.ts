@@ -12,21 +12,20 @@
  *     wander along strike;
  *   - a little seeded roughness, never above the nominal level, and an irregular surveyed edge.
  *
- * Floor guarantee: free ground is a union of block-column squares and bands whose edges lie on
- * block boundaries, and the vertex spacing divides the block size, so every terrain cell is
- * either wholly free or wholly not. A vertex touching a free cell is floor, so walls rise only
- * outside free ground and every block movement may settle (whole swollen box on free ground,
- * movement.ts) rests on drawn floor. The surveyed edge is sized to contain all of free ground.
+ * Floor guarantee: free ground's edges lie on block boundaries and the vertex spacing divides the
+ * block size, so every terrain cell is wholly free or wholly not. Every terrain cell within one
+ * cell (8-neighbour) of a free cell is flat floor, so the floor covers free ground plus a margin
+ * of one spacing (`floorMargin`) all round, and walls rise only beyond it. Movement keeps every
+ * block's animated box within that margin of free ground (footprint.pathIsFree), so no block
+ * meets the terrain, settled or in flight. The surveyed edge contains all of free ground.
  *
  * Synthetic and seeded from the model seed: same model + face → identical terrain.
  */
-import { createFootprint, FLOOR_WIDTH, modelColumnMask, type FreeFace } from './footprint';
+import { createFootprint, FLOOR_WIDTH, floorMargin, modelColumnMask, TERRAIN_SPACING_TARGET, type FreeFace } from './footprint';
 import { createSeededNoise3D, deriveSeed, fbm3 } from './rng';
 import type { BlockModel, Vec2 } from './types';
 
-/** m, target vertex spacing; the actual spacing is the block size divided by a whole number. */
-export const TERRAIN_SPACING_TARGET = 1.25;
-export { FLOOR_WIDTH };
+export { FLOOR_WIDTH, TERRAIN_SPACING_TARGET };
 /** m, berm between the blast's back edge and the first upper bench face, and between faces. */
 export const BERM_WIDTH = 12;
 /** degrees, bench face angle of the walls. */
@@ -66,8 +65,7 @@ export function buildPitTerrain(model: BlockModel, face: FreeFace): PitTerrain {
   const { grid } = model;
   const fp = createFootprint(grid, modelColumnMask(model), face);
   const { frame } = fp;
-  const bs = Math.min(grid.blockSize[0], grid.blockSize[1]);
-  const spacing = bs / Math.max(1, Math.round(bs / TERRAIN_SPACING_TARGET));
+  const spacing = floorMargin(grid);
   const zToe = grid.origin[2];
   const H = grid.nz * grid.blockSize[2];
   const crest = zToe + H;
@@ -104,7 +102,36 @@ export function buildPitTerrain(model: BlockModel, face: FreeFace): PitTerrain {
   const rough = createSeededNoise3D(deriveSeed(model.seed, 'terrain/rough'));
   const wander = createSeededNoise3D(deriveSeed(model.seed, 'terrain/walls'));
   const edge = createSeededNoise3D(deriveSeed(model.seed, 'terrain/edge'));
-  const eps = 1e-3 * spacing;
+  // Floor cells: free terrain cells (tested at their centres; exact, see above) dilated by one cell.
+  const cx = nx - 1;
+  const cy = ny - 1;
+  const free = new Uint8Array(cx * cy);
+  for (let j = 0; j < cy; j++)
+    for (let i = 0; i < cx; i++) {
+      const [a, b] = frame.toLocal(ox + (i + 0.5) * spacing, oy + (j + 0.5) * spacing);
+      free[i + cx * j] = fp.isFree(a, b) ? 1 : 0;
+    }
+  const floorCell = new Uint8Array(cx * cy);
+  for (let j = 0; j < cy; j++)
+    for (let i = 0; i < cx; i++) {
+      if (!free[i + cx * j]) continue;
+      for (let dj = -1; dj <= 1; dj++)
+        for (let di = -1; di <= 1; di++) {
+          const u = i + di;
+          const v = j + dj;
+          if (u >= 0 && u < cx && v >= 0 && v < cy) floorCell[u + cx * v] = 1;
+        }
+    }
+  /** Is vertex (ix, iy) a corner of a floor cell? */
+  const floorVertex = (ix: number, iy: number) => {
+    for (let dj = -1; dj <= 0; dj++)
+      for (let di = -1; di <= 0; di++) {
+        const u = ix + di;
+        const v = iy + dj;
+        if (u >= 0 && u < cx && v >= 0 && v < cy && floorCell[u + cx * v]) return true;
+      }
+    return false;
+  };
 
   const height = new Float32Array(nx * ny);
   const mask = new Uint8Array(nx * ny);
@@ -114,12 +141,8 @@ export function buildPitTerrain(model: BlockModel, face: FreeFace): PitTerrain {
       const y = oy + iy * spacing;
       const [a, b] = frame.toLocal(x, y);
       const n = (fbm3(rough, x / 7, y / 7, 0.5, 3) + 1) / 2; // 0..1
-      // Floor if the vertex touches free ground (any of the four cells around it).
-      const [la, lb] = frame.toLocal(x - eps, y - eps);
-      const [ra, rb] = frame.toLocal(x + eps, y + eps);
-      const touchesFree = fp.isFree(la, lb) || fp.isFree(ra, rb) || fp.isFree(la, rb) || fp.isFree(ra, lb);
       let z: number;
-      if (touchesFree) {
+      if (floorVertex(ix, iy)) {
         z = zToe - ROUGH_FLOOR * n;
       } else if (a >= fp.openEnd && b >= fp.openLatMin && b < fp.openLatMax) {
         // Past the bay: floor level, then a face down to the bench below.

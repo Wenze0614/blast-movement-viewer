@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { getBlastConfig } from '../blasts';
 import { blockIdAt, blockModelConfigHash, generateBlockModel, type BlockModelConfig } from '../blockModel';
 import { DEFAULT_BLAST_PARAMETERS } from '../defaults';
-import { FLOOR_WIDTH, SIDE_OPEN } from '../footprint';
+import { floorMargin, FLOOR_WIDTH, modelFootprint, SIDE_OPEN } from '../footprint';
 import { canonicalParams } from '../hash';
 import type { LensFeature } from '../orebody';
 import {
@@ -226,8 +226,23 @@ describe('computeMovement (M3)', () => {
     // With cubic blocks one block step over one cell is 45°, so "neighbour difference ≤ tan(φ)·c′"
     // cannot hold literally for φ < 45°. The lattice criterion bounds the AVERAGE slope:
     // drop over d cells ≤ max(1, round(d·tan(φ)·c′ / H_b·k)) blocks, for d = 1..6.
+    // A drop is exempt only where NO block of the pile could get there along its straight throw
+    // path without crossing unblasted rock (a pile against a corner of the bench stands steeper):
+    // checked here through the public footprint API, so the relaxation must make every move it may.
     for (const r of [r017, r022]) {
-      const { stats, result } = r;
+      const { stats, result, model } = r;
+      const fp = modelFootprint(model, P.freeFace);
+      const tol = floorMargin(model.grid);
+      const [bx, by] = model.grid.blockSize;
+      const piles = cellsOf(r);
+      const g = result.postGrid;
+      const someoneCanReach = (from: number, jx: number, jy: number) =>
+        (piles.get(from) ?? []).some((n) => {
+          const [as, bs] = fp.frame.toLocal(result.start[3 * n], result.start[3 * n + 1]);
+          const [ae, be] = fp.frame.toLocal(g.origin[0] + (jx + 0.5) * g.cellSize, g.origin[1] + (jy + 0.5) * g.cellSize);
+          return fp.pathIsFree(as, bs, ae, be, bx / 2, by / 2, result.looseScale, tol);
+        });
+      let exempt = 0;
       expect(stats.converged).toBe(true);
       const { nx, ny, cellSize } = result.postGrid;
       // Defaults are cubic (c′ = H_b·k), so the drop limit is max(1, round(d · tan 37°)) blocks,
@@ -252,11 +267,15 @@ describe('computeMovement (M3)', () => {
               const jx = ix + dx * d;
               const jy = iy + dy * d;
               if (jx < 0 || jx >= nx || jy < 0 || jy >= ny || !stats.validMask[jx + nx * jy]) break;
-              if (stats.stackCount[c] - stats.stackCount[jx + nx * jy] > allowed[d]) violations++;
+              if (stats.stackCount[c] - stats.stackCount[jx + nx * jy] > allowed[d]) {
+                if (someoneCanReach(c, jx, jy)) violations++;
+                else exempt++;
+              }
             }
           }
         }
       expect(violations).toBe(0);
+      expect(exempt).toBeLessThan(10); // a few cells at the corners of the face, not the pile
       // the surface heightfield is the stack count × stacked block height
       for (let c = 0; c < nx * ny; c++) expect(result.surface.height[c]).toBeCloseTo(stats.stackCount[c] * stats.stackHeight, 4);
     }

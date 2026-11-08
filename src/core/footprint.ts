@@ -12,10 +12,14 @@
  * face it is unblasted rock. Strips with no blocks (beside the blast) take the frontmost face of
  * the whole blast, so the open floor continues past the blast's sides.
  *
- * The open floor is bounded: it reaches `FLOOR_WIDTH` m past the frontmost face (where the pit
- * terrain steps down to the bench below) and `SIDE_OPEN` m beyond the blast's sides. Movement may
- * land rock only on free ground (footprint ∪ open floor) and the terrain is floor over all of it,
- * so a settled block always rests on drawn floor.
+ * The open floor is bounded: it reaches about `FLOOR_WIDTH` m past the frontmost face (where the
+ * pit terrain steps down to the bench below) and `SIDE_OPEN` m beyond the blast's sides, both
+ * rounded up to whole blocks. Every edge of free ground (footprint ∪ open floor) therefore lies on
+ * a block boundary, so free-ness is uniform within each block-grid cell and `rectIsFree` is exact.
+ *
+ * The pit terrain is floor over free ground plus a margin of `floorMargin(grid)` m all round.
+ * Movement lands rock only on free ground and keeps every animated box within that margin of it
+ * (`pathIsFree`), so no block ever meets the terrain, settled or in flight.
  */
 import { pointInRing } from './geometry';
 import type { BlastParameters, BlockModel, GridSpec, Vec2 } from './types';
@@ -26,6 +30,17 @@ export type FreeFace = BlastParameters['freeFace'];
 export const FLOOR_WIDTH = 45;
 /** m the open floor extends beyond the footprint's sides (the width of the previous cut). */
 export const SIDE_OPEN = 30;
+/** m, target terrain vertex spacing (terrain.ts). */
+export const TERRAIN_SPACING_TARGET = 1.25;
+
+/**
+ * m: the pit terrain's vertex spacing, which is also its floor margin around free ground. The
+ * block size divided by a whole number, so terrain cells nest inside block cells.
+ */
+export function floorMargin(grid: GridSpec): number {
+  const bs = Math.min(grid.blockSize[0], grid.blockSize[1]);
+  return bs / Math.max(1, Math.round(bs / TERRAIN_SPACING_TARGET));
+}
 
 export interface BenchFrame {
   /** m, bounding-box length along the throw and width across it. */
@@ -131,11 +146,21 @@ export interface Footprint {
   /** Free ground (rock may land here): inside the footprint or on the open floor. */
   isFree(a: number, b: number): boolean;
   /**
-   * Is the whole square [a0, a0 + size] × [b0, b0 + size] free ground? Sampled on a lattice finer
-   * than half a block (free ground is a union of block-column squares and an axis-aligned strip
-   * region, so no rock column can hide between samples), inset by a hair so shared edges count.
+   * Is the whole rectangle [a0, a1] × [b0, b1] free ground? Exact: every block-grid cell it
+   * overlaps (edges touching count as not overlapping) is tested at its centre, and free-ness is
+   * uniform within a cell. An empty rectangle (a1 < a0) is a point test at its centre.
    */
+  rectIsFree(a0: number, a1: number, b0: number, b1: number): boolean;
+  /** rectIsFree for the square [a0, a0 + size] × [b0, b0 + size]. */
   boxIsFree(a0: number, b0: number, size: number): boolean;
+  /**
+   * Does a block's animated box stay within `tolerance` m (Chebyshev) of free ground all the way
+   * from (as, bs) to (ae, be)? The box's centre and half-extents (ha0, hb0 at the start, scaled by
+   * mix(1, k, s)) are both linear in the eased progress s, so the box between two sampled poses
+   * lies inside the bounding box of the two poses: checking those bounding boxes (shrunk by the
+   * tolerance) is conservative, never misses.
+   */
+  pathIsFree(as: number, bs: number, ae: number, be: number, ha0: number, hb0: number, k: number, tolerance: number): boolean;
 }
 
 export function createFootprint(grid: GridSpec, columns: Uint8Array, face: FreeFace): Footprint {
@@ -177,18 +202,47 @@ export function createFootprint(grid: GridSpec, columns: Uint8Array, face: FreeF
   };
   const latMin = latLo * cb;
   const latMax = (latHi + 1) * cb;
-  const openEnd = frontMax + FLOOR_WIDTH;
-  const openLatMin = latMin - SIDE_OPEN;
-  const openLatMax = latMax + SIDE_OPEN;
+  // Rounded to whole blocks so every edge of free ground is a block boundary.
+  const openEnd = frontMax + Math.ceil(FLOOR_WIDTH / ca - 1e-9) * ca;
+  const openLatMin = latMin - Math.ceil(SIDE_OPEN / cb - 1e-9) * cb;
+  const openLatMax = latMax + Math.ceil(SIDE_OPEN / cb - 1e-9) * cb;
   const isOpen = (a: number, b: number) => a >= faceLine(b) && a < openEnd && b >= openLatMin && b < openLatMax;
   const isFree = (a: number, b: number) => contains(a, b) || isOpen(a, b);
-  const step = Math.min(ca, cb) / 2;
-  const boxIsFree = (a0: number, b0: number, size: number) => {
-    const inset = 1e-6 * size;
-    const n = Math.max(1, Math.ceil(size / step));
-    for (let u = 0; u <= n; u++) {
-      const a = a0 + inset + ((size - 2 * inset) * u) / n;
-      for (let v = 0; v <= n; v++) if (!isFree(a, b0 + inset + ((size - 2 * inset) * v) / n)) return false;
+  const eps = 1e-7 * Math.max(ca, cb);
+  const rectIsFree = (a0: number, a1: number, b0: number, b1: number) => {
+    if (a1 < a0) a0 = a1 = (a0 + a1) / 2;
+    if (b1 < b0) b0 = b1 = (b0 + b1) / 2;
+    const i0 = Math.floor((a0 + eps) / ca);
+    const i1 = Math.max(i0, Math.floor((a1 - eps) / ca));
+    const j0 = Math.floor((b0 + eps) / cb);
+    const j1 = Math.max(j0, Math.floor((b1 - eps) / cb));
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (!isFree((i + 0.5) * ca, (j + 0.5) * cb)) return false;
+    return true;
+  };
+  const boxIsFree = (a0: number, b0: number, size: number) => rectIsFree(a0, a0 + size, b0, b0 + size);
+  const step = Math.min(ca, cb) / 4;
+  const pathIsFree = (as: number, bs: number, ae: number, be: number, ha0: number, hb0: number, k: number, tol: number) => {
+    const n = Math.max(1, Math.ceil(Math.max(Math.abs(ae - as), Math.abs(be - bs), (k - 1) * Math.max(ha0, hb0)) / step));
+    // Shrunk pose at eased progress s: centre ± max(0, half(s) − tol).
+    const pose = (s: number): [number, number, number, number] => {
+      const a = as + (ae - as) * s;
+      const b = bs + (be - bs) * s;
+      const g = 1 + (k - 1) * s;
+      const ha = Math.max(0, ha0 * g - tol);
+      const hb = Math.max(0, hb0 * g - tol);
+      return [a - ha, a + ha, b - hb, b + hb];
+    };
+    let prev = pose(0);
+    for (let q = 1; q <= n; q++) {
+      const cur = pose(q / n);
+      const ok = rectIsFree(
+        Math.min(prev[0], cur[0]),
+        Math.max(prev[1], cur[1]),
+        Math.min(prev[2], cur[2]),
+        Math.max(prev[3], cur[3]),
+      );
+      if (!ok) return false;
+      prev = cur;
     }
     return true;
   };
@@ -207,7 +261,9 @@ export function createFootprint(grid: GridSpec, columns: Uint8Array, face: FreeF
     faceLine,
     isOpen,
     isFree,
+    rectIsFree,
     boxIsFree,
+    pathIsFree,
   };
 }
 

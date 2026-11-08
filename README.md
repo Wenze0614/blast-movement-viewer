@@ -201,8 +201,10 @@ face ÷ footprint depth (0 = front row) and h = height in the bench (1 = crest):
    noise, so neighbours move coherently. The defaults give ~6–10 m at the crest and ~3–4 m at the toe.
 2. **Swell and re-grid.** k = swell^(1/3). Targets are binned onto a post-blast plan grid with cell
    size c·k. Rock lands only on free ground: the blast footprint or the open floor in front of the
-   face. A target on unblasted rock slides back toward the block's own strip, then forward along
-   the throw until the ground is free.
+   face (a bay about 45 m deep and 30 m wider than the blast each side). A cell is taken only if
+   the whole swollen block fits on free ground **and** the block's animated box stays over free
+   ground (within the terrain's 1.25 m floor margin) all the way there, so no block meets the pit
+   terrain, settled or in flight. A blocked target moves to the nearest reachable cell.
 3. **Stacking.** Each cell stacks its blocks by original elevation, so nothing floats or overlaps.
    Loose volume = swell × bank volume exactly (unit-tested).
 4. **Angle of repose.** The tallest offending stack moves its top block to the lowest valid
@@ -218,7 +220,8 @@ face ÷ footprint depth (0 = front row) and h = height in the bench (1 = crest):
 
 **Known simplifications:** no timing, explosive or rock physics; vertical order is preserved within
 a column; positions snap to the post-blast lattice (no sub-block mixing); one free face; a single
-dig horizon.
+dig horizon; blocks fly in straight lines, so a pile against a corner of unblasted rock can stand a
+little steeper than the repose angle (no block could reach the lower cell without crossing the rock).
 
 **Dig lines.** Column tonnage-weighted grade per plan cell (the in-situ grid for the original line,
 the post-blast grid for the adjusted one), a one-cell Gaussian blur (a stand-in for minimum mining
@@ -243,9 +246,9 @@ Reconciliation runs on the client: it is cheap and has to follow every parameter
 
 ## Performance
 
-- **Movement compute:** about 2–4 ms for the 3,200-block blasts and 13 ms for 27,088 blocks
-  (measured during development). Building the pit terrain (~23k vertices, ~28k triangles) takes
-  about 15 ms, once per blast. An API movement round trip on a cold seed took 16–42 ms end to end locally.
+- **Movement compute:** about 4–6 ms for the 3,200-block blasts and 40 ms for 27,088 blocks
+  (measured during development; the free-path checks on every destination are most of it).
+  Building the pit terrain (~33k vertices, ~48k triangles) takes about 20–25 ms, once per blast. An API movement round trip on a cold seed took 16–42 ms end to end locally.
 - **Draw calls:** one per layer. The blocks are **one** draw call at any block count and the holes
   one, plus the terrain and the two dig lines.
 - **Per-frame CPU while scrubbing or playing:** the `uProgress` and `uOpacity` uniform writes.

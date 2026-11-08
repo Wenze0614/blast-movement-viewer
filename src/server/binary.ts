@@ -67,8 +67,36 @@ export function binary(gzipped: Uint8Array<ArrayBuffer>, opts: CacheOptions & { 
   }
   const headers = cacheHeaders(opts);
   headers.set('Content-Type', BINARY_TYPE);
+  if (gzipped.byteLength > STREAM_OVER_BYTES) {
+    // Vercel Functions cap a non-streamed response body at 4.5 MB (413 FUNCTION_PAYLOAD_TOO_LARGE);
+    // streamed bodies are exempt. Only the scale blast's payloads (~13 MB) take this path.
+    return new Response(chunked(gzipped), { status: 200, headers });
+  }
   headers.set('Content-Length', String(gzipped.byteLength));
   return new Response(gzipped, { status: 200, headers });
+}
+
+/**
+ * Bodies above this many bytes are streamed (see `binary`): safely under Vercel's 4.5 MB cap on a
+ * non-streamed Function response.
+ */
+export const STREAM_OVER_BYTES = 4 * 1024 * 1024;
+const STREAM_CHUNK_BYTES = 1024 * 1024;
+
+/** A ReadableStream of `bytes` in 1 MB chunks. */
+function chunked(bytes: Uint8Array<ArrayBuffer>): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= bytes.byteLength) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(bytes.byteLength, offset + STREAM_CHUNK_BYTES);
+      controller.enqueue(bytes.subarray(offset, end));
+      offset = end;
+    },
+  });
 }
 
 /** gzip bytes with the web-standard CompressionStream (Node and edge runtimes alike). */

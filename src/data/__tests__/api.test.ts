@@ -62,6 +62,29 @@ describe('ApiDataSource', () => {
     ]);
   });
 
+  it.each([
+    ['409 STALE_VERSION', async () => Response.json({ error: { code: 'STALE_VERSION', message: 'old v' } }, { status: 409 })],
+    ['a movement for another model (MODEL_MISMATCH)', async () => {
+      const other = generateBlockModel({ ...cfg, seed: cfg.seed + 1 });
+      return new Response(encodeMovement(computeMovement(other, params), other.configHash));
+    }],
+  ] as const)('%s on the movement drops the cached API model, so the next getModel refetches', async (_name, movementResponse) => {
+    let failMovement = true;
+    const f = fakeFetch(async (url, init) =>
+      url.pathname.endsWith('/movement') && failMovement ? movementResponse() : serve(url, init),
+    );
+    const api = new ApiDataSource({ fetch: f });
+    await api.getModel(ID); // cached
+    await expect(api.getMovement(ID, params)).rejects.toThrow();
+    failMovement = false;
+    const modelFetches = () => f.mock.calls.filter(([u]) => String(u).includes('/model')).length;
+    expect(modelFetches()).toBe(1);
+    await api.getModel(ID);
+    expect(modelFetches()).toBe(2); // evicted → refetched
+    await api.getModel(ID);
+    expect(modelFetches()).toBe(2); // cached again
+  });
+
   it('non-2xx → ApiRequestError with the typed ApiError code', async () => {
     const api = new ApiDataSource({
       fetch: fakeFetch(async () => Response.json({ error: { code: 'INVALID_PARAMS', message: 'bad' } }, { status: 400 })),

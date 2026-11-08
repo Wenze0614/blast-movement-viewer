@@ -24,6 +24,14 @@ export class ApiRequestError extends Error {
   }
 }
 
+/** Errors that mean the cached API model may no longer be the server's. */
+function isStaleModelError(err: unknown): boolean {
+  return (
+    (err instanceof CodecError && err.code === 'MODEL_MISMATCH') ||
+    (err instanceof ApiRequestError && err.code === 'STALE_VERSION')
+  );
+}
+
 export interface ApiDataSourceOptions {
   /** Prefix for `/api/...`; '' = same origin. */
   baseUrl?: string;
@@ -112,12 +120,13 @@ export class ApiDataSource implements DataSource {
   }
 
   async getMovement(id: string, params: BlastParameters, signal?: AbortSignal): Promise<MovementResult> {
-    const [model, res] = await Promise.all([this.getModel(id, signal), this.request(movementPath(id, params), signal)]);
     try {
+      const [model, res] = await Promise.all([this.getModel(id, signal), this.request(movementPath(id, params), signal)]);
       return decodeMovement(await res.arrayBuffer(), model);
     } catch (err) {
-      // The server's model changed under our cached one: drop it so the next getModel refetches.
-      if (err instanceof CodecError && err.code === 'MODEL_MISMATCH') this.models.delete(id);
+      // The server's data changed under our cached model (a payload for another model, or our
+      // `?v=` is no longer current): drop it so the next getModel refetches.
+      if (isStaleModelError(err)) this.models.delete(id);
       throw err;
     }
   }

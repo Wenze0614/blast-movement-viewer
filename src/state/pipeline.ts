@@ -13,13 +13,14 @@
  * the API's per-call fallback, can come from different sources (e.g. a local model loaded while
  * the API was down, then an API movement after it recovered on a newer deploy). On a mismatch the
  * movement is dropped, the model is reloaded from the DataSource, and the movement is requested
- * again for that model, so the store ends with a consistent pair. A second mismatch is reported
- * as an error instead of being applied.
+ * again for that model. If the pair is STILL mismatched, both model and movement are loaded from
+ * local compute (always a consistent pair) and `store.fallback` is set, so the source badge reads
+ * "Local fallback". Only a mismatch inside local compute itself is reported as an error.
  */
 import { isMovementFor } from '@/core/movement';
-import { isAbortError, type DataSource } from '@/data';
+import { isAbortError, LocalDataSource, type DataSource } from '@/data';
 import { attachDerive } from './derive';
-import type { AppStore } from './store';
+import type { AppState, AppStore } from './store';
 
 export interface DataPipeline {
   /** Resolves when the current blast (or movement) load has settled. Useful in tests. */
@@ -30,7 +31,13 @@ export interface DataPipeline {
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-export function startDataPipeline(store: AppStore, data: DataSource): DataPipeline {
+export interface DataPipelineOptions {
+  /** Last resort when the DataSource keeps returning mismatched pairs. Default: a LocalDataSource. */
+  local?: DataSource;
+}
+
+export function startDataPipeline(store: AppStore, data: DataSource, options: DataPipelineOptions = {}): DataPipeline {
+  let local = options.local ?? null;
   let blastCtrl: AbortController | null = null;
   let movementCtrl: AbortController | null = null;
   let disposed = false;
@@ -64,8 +71,8 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
       if (!isMovementFor(movement, model, params)) {
         const detail = `movement ${movement.paramsHash} (${movement.delay.length} blocks, ${data.kind}) does not belong to model ${model.configHash} (${model.count} blocks) with the current params`;
         if (!resync) {
-          console.error(`[bmv] ${detail}; giving up.`);
-          store.getState().setStatus('error', 'Model and movement are out of sync; reload the page.');
+          console.warn(`[bmv] ${detail} again; using local compute for both model and movement.`);
+          await loadLocalPair(blastId, params, ctrl, isCurrent, t0);
           return;
         }
         console.warn(`[bmv] ${detail}; reloading a consistent model + movement.`);
@@ -78,6 +85,30 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     } catch (err) {
       fail(err, isCurrent);
     }
+  }
+
+  /** Model + movement both from local compute: a consistent pair by construction. */
+  async function loadLocalPair(
+    blastId: string,
+    params: AppState['params'],
+    ctrl: AbortController,
+    isCurrent: () => boolean,
+    t0: number,
+  ): Promise<void> {
+    local ??= new LocalDataSource();
+    const model = await local.getModel(blastId, ctrl.signal);
+    const movement = await local.getMovement(blastId, params, ctrl.signal);
+    if (!isMovementFor(movement, model, params)) {
+      store.getState().setStatus('error', 'Model and movement are out of sync; reload the page.');
+      return;
+    }
+    // isCurrent() compares the store's model with the one this load started from; that changes
+    // below on purpose, so check staleness (abort, blast, params) before writing anything.
+    if (!isCurrent()) return;
+    const s = store.getState();
+    s.setFallback('The API returned a movement for a different model; computed both locally.');
+    s.setModel(model, local.kind);
+    store.getState().setMovement(movement, local.kind, now() - t0);
   }
 
   async function loadBlast(id: string): Promise<void> {

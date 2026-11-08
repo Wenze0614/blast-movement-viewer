@@ -164,6 +164,7 @@ describe('?v= data version (stale clients after a deploy)', () => {
   it('movement: a stale v → 409 STALE_VERSION (no-store), never a movement for the current model', async () => {
     const res = await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams, '&v=0badc0de'))), ctx(cfg.id));
     expect(res.status).toBe(409);
+    expect(res.headers.get('cache-control')).toBe('no-store'); // a 409 must never be cached
     expect(res.headers.get('content-type')).not.toBe('application/octet-stream');
     expect(res.headers.get('etag')).toBeNull();
     const body = await errorBody(res);
@@ -182,6 +183,7 @@ describe('?v= data version (stale clients after a deploy)', () => {
   it('model: a stale v → 409; the current v and no v → 200', async () => {
     const stale = await getModel(new Request(`${BASE}/${cfg.id}/model?v=0badc0de`), ctx(cfg.id));
     expect(stale.status).toBe(409);
+    expect(stale.headers.get('cache-control')).toBe('no-store');
     expect((await errorBody(stale)).error.code).toBe('STALE_VERSION');
     expect((await getModel(new Request(`${BASE}/${cfg.id}/model?v=${current}`), ctx(cfg.id))).status).toBe(200);
     expect((await getModel(new Request(`${BASE}/${cfg.id}/model`), ctx(cfg.id))).status).toBe(200);

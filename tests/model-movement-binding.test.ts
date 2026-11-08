@@ -134,7 +134,7 @@ describe('model–movement binding across fallback + API recovery', () => {
     pipeline.dispose();
   });
 
-  it('a movement that still does not match after one reload is an error, never applied', async () => {
+  it('still mismatched after one reload → local compute for BOTH model and movement; badge shows Local fallback', async () => {
     // Broken backend: the model is A but every movement is computed for B.
     const modelB = generateBlockModel({ ...cfgA, seed: cfgA.seed + 7 });
     const api = fakeApi(cfgA, { movementFor: () => modelB });
@@ -146,10 +146,14 @@ describe('model–movement binding across fallback + API recovery', () => {
 
     const s = store.getState();
     expect(watch.violations).toEqual([]);
-    expect(s.movement).toBeNull();
-    expect(s.status).toBe('error');
-    expect(s.error).toMatch(/out of sync/);
+    expect(s.status).toBe('ready');
+    expect(s.source).toBe('local');
+    expect(s.fallback).toMatch(/different model/); // → SourceBadge "Local fallback"
+    expect(s.model!.configHash).toBe(modelA.configHash);
+    expect(isMovementFor(s.movement!, s.model!, s.params)).toBe(true);
+    expect(s.movement!.params.maxThrow).toBe(12);
     expect(api.calls.movement).toBe(2); // one resync, no loop
+    expect(s.reconciliation).not.toBeNull();
     watch.unsub();
     pipeline.dispose();
   });

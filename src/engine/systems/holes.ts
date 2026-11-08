@@ -66,14 +66,30 @@ export const createHolesSystem: SystemFactory = (ctx) => {
     geometry.dispose();
   });
 
+  /**
+   * Render state of the mesh: 'opaque' (opacity 1), 'fading' (0 < opacity < 1) or 'hidden' (faded
+   * out, layer off, or no holes). The material flags and `mesh.visible` are written only on a
+   * transition between these; per frame only the opacity uniform is written.
+   */
+  type HolesState = 'opaque' | 'fading' | 'hidden';
+  let state: HolesState | null = null;
+
   const applyVisibility = () => {
     const s = store.getState();
     const opacity = holesOpacity(s.progress);
     uniforms.uOpacity.value = opacity;
-    const fading = opacity < 1;
-    material.transparent = fading;
-    material.depthWrite = !fading;
-    mesh.visible = s.layers.holes && geometry.instanceCount > 0 && opacity > 0;
+    const next: HolesState =
+      !s.layers.holes || geometry.instanceCount === 0 || opacity <= 0 ? 'hidden' : opacity < 1 ? 'fading' : 'opaque';
+    if (next === state) return;
+    state = next;
+    mesh.visible = next !== 'hidden';
+    if (next === 'hidden') return; // keep the last material flags; nothing is drawn
+    const fading = next === 'fading';
+    if (material.transparent !== fading) {
+      material.transparent = fading;
+      material.depthWrite = !fading;
+      material.needsUpdate = true; // opaque ↔ transparent moves the mesh between render lists
+    }
   };
 
   const rebuild = (blast: BlastDetail | null) => {
@@ -111,7 +127,8 @@ export const createHolesSystem: SystemFactory = (ctx) => {
       applySection();
     },
     update() {
-      // P9: the only per-frame CPU work for the holes.
+      // P9: the only per-frame CPU work for the holes: one uniform write (material flags and
+      // visibility change only on an opaque ↔ fading ↔ hidden transition).
       applyVisibility();
     },
     dispose() {

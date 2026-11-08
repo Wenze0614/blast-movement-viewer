@@ -140,6 +140,84 @@ describe('holes system (P9)', () => {
     ctx.bag.disposeAll();
   });
 
+  /** Counts writes to the material flags, `needsUpdate` and `mesh.visible` (values pass through). */
+  function spyWrites(material: THREE.Material, mesh: THREE.Mesh) {
+    const writes: string[] = [];
+    const wrap = (obj: object, key: string) => {
+      const proto = Object.getPrototypeOf(obj) as object;
+      const inherited = Object.getOwnPropertyDescriptor(proto, key);
+      let value = (obj as Record<string, unknown>)[key];
+      Object.defineProperty(obj, key, {
+        configurable: true,
+        get: () => (inherited?.get ? inherited.get.call(obj) : value),
+        set: (v: unknown) => {
+          writes.push(key);
+          if (inherited?.set) inherited.set.call(obj, v);
+          else value = v;
+        },
+      });
+    };
+    for (const key of ['transparent', 'depthWrite', 'needsUpdate']) wrap(material, key);
+    wrap(mesh, 'visible');
+    return writes;
+  }
+
+  it('per frame only the opacity uniform is written; material/visibility change only on a transition', async () => {
+    const ctx = mockCtx();
+    const system = createHolesSystem(ctx, {});
+    await system.init?.();
+    const s = ctx.store.getState();
+    s.setBlast(detail);
+    s.setModel(model, 'local');
+    s.setMovement(movement, 'local');
+    const mesh = holesMeshes(ctx.scene)[0];
+    const material = mesh.material as THREE.ShaderMaterial;
+    const uOpacity = material.uniforms.uOpacity;
+    const writes = spyWrites(material, mesh);
+    const frames = (n: number) => {
+      for (let i = 0; i < n; i++) system.update?.(frame);
+    };
+    const step = (progress: number) => {
+      ctx.store.getState().setProgress(progress);
+      writes.length = 0;
+      frames(50);
+      return [...writes];
+    };
+
+    // Constant progress (already opaque from setup): no writes at all over many frames.
+    expect(step(0)).toEqual([]);
+    expect(uOpacity.value).toBe(1);
+    // opaque → fading: one transition, then constant progress stays silent.
+    ctx.store.getState().setProgress(HOLES_FADE_END / 4);
+    writes.length = 0;
+    system.update?.(frame);
+    expect(writes.sort()).toEqual(['depthWrite', 'needsUpdate', 'transparent', 'visible']);
+    writes.length = 0;
+    frames(50);
+    expect(writes).toEqual([]);
+    // Still fading at a different opacity: the uniform changes, nothing else.
+    expect(step(HOLES_FADE_END / 2)).toEqual([]);
+    expect(uOpacity.value).toBeCloseTo(holesOpacity(HOLES_FADE_END / 2), 6);
+    // fading → hidden at full fade: only visibility.
+    expect(step(HOLES_FADE_END)).toEqual(['visible']);
+    expect(mesh.visible).toBe(false);
+    expect(step(0.7)).toEqual([]);
+    // Rewind: hidden → opaque restores visibility and the opaque flags.
+    expect(step(0).sort()).toEqual(['depthWrite', 'needsUpdate', 'transparent', 'visible']);
+    expect({ visible: mesh.visible, transparent: material.transparent, depthWrite: material.depthWrite }).toEqual({
+      visible: true,
+      transparent: false,
+      depthWrite: true,
+    });
+    // Layer toggle is a transition too (written once, from the subscription).
+    writes.length = 0;
+    ctx.store.getState().setLayer('holes', false);
+    frames(50);
+    expect(writes).toEqual(['visible']);
+    expect(mesh.visible).toBe(false);
+    ctx.bag.disposeAll();
+  });
+
   it('opaque with depth write before the blast; transparent without depth write only while fading', async () => {
     const ctx = mockCtx();
     const system = createHolesSystem(ctx, {});

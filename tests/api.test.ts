@@ -12,9 +12,10 @@ import { GET as getModel } from '../app/api/blasts/[id]/model/route';
 import { GET as getMovement } from '../app/api/blasts/[id]/movement/route';
 import { GET as getHealth } from '../app/api/health/route';
 import type { ApiError, BlastDetail, BlastSummary } from '@/core/api-types';
-import { BLAST_CONFIGS, blastDataVersion, getBlastConfig } from '@/core/blasts';
+import { blastDataVersion, getBlastConfig, STANDARD_BLASTS } from '@/core/blasts';
 import { generateBlockModel } from '@/core/blockModel';
-import { decodeModel, decodeMovement } from '@/core/codec';
+import { decodeModel, decodeMovement, encodeModel } from '@/core/codec';
+import { readPayload } from '@/data/api';
 import { canonicalParamsString } from '@/core/hash';
 import { computeMovement } from '@/core/movement';
 import type { BlastParameters } from '@/core/types';
@@ -39,12 +40,12 @@ describe('GET /api/health and /api/blasts', () => {
     expect(await res.json()).toMatchObject({ ok: true, version: expect.any(String) });
   });
 
-  it('blasts: the three demo BlastSummary entries, s-maxage=3600', async () => {
+  it('blasts: the four demo BlastSummary entries (three standard + the scale blast), s-maxage=3600', async () => {
     const res = await getBlasts();
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('public, s-maxage=3600');
     const body = (await res.json()) as BlastSummary[];
-    expect(body.map((b) => b.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
+    expect(body.map((b) => b.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031', 'b1050-001']);
     expect(body[2].blockCount).toBe(27088);
   });
 });
@@ -68,18 +69,30 @@ describe('GET /api/blasts/:id', () => {
 });
 
 describe('GET /api/blasts/:id/model', () => {
-  it.each(BLAST_CONFIGS.map((c) => c.id))('%s → octet-stream BMV1 model, immutable, ETag = configHash; round-trips', async (id) => {
+  it.each(STANDARD_BLASTS.map((c) => c.id))('%s → gzipped BMV1 model, immutable, ETag = configHash; round-trips', async (id) => {
     const res = await getModel(new Request(`${BASE}/${id}/model?v=${blastDataVersion(getBlastConfig(id)!)}`), ctx(id));
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-type')).toBe('application/gzip');
     expect(res.headers.get('cache-control')).toBe('public, s-maxage=31536000, immutable');
-    const buf = await res.arrayBuffer();
-    expect(Number(res.headers.get('content-length'))).toBe(buf.byteLength);
-    const model = decodeModel(buf);
+    expect(Number(res.headers.get('content-length'))).toBe((await res.clone().arrayBuffer()).byteLength);
+    const model = decodeModel(await readPayload(res));
     const want = generateBlockModel(getBlastConfig(id)!);
     expect(res.headers.get('etag')).toBe(`"${want.configHash}"`);
     expect(model.configHash).toBe(want.configHash);
     expect(Array.from(model.grade)).toEqual(Array.from(want.grade));
+  });
+
+  it('payloads travel as a gzip file (Next drops Content-Encoding): inflated, the bytes are the BMV1 payload', async () => {
+    const id = 'b1040-031';
+    const res = await getModel(new Request(`${BASE}/${id}/model?v=${blastDataVersion(getBlastConfig(id)!)}`), ctx(id));
+    expect(res.headers.get('content-type')).toBe('application/gzip');
+    expect(res.headers.get('content-encoding')).toBeNull();
+    const raw = new Uint8Array(await res.clone().arrayBuffer());
+    expect([raw[0], raw[1]]).toEqual([0x1f, 0x8b]);
+    const inflated = new Uint8Array(await readPayload(res));
+    expect(String.fromCharCode(...inflated.subarray(0, 4))).toBe('BMV1');
+    expect(inflated).toEqual(encodeModel(generateBlockModel(getBlastConfig(id)!)));
+    expect(raw.byteLength).toBeLessThan(inflated.byteLength);
   });
 
   it('If-None-Match → 304; unknown id → 404', async () => {
@@ -97,13 +110,13 @@ describe('GET /api/blasts/:id/movement', () => {
   const model = generateBlockModel(cfg);
   const expected = computeMovement(model, cfg.defaultParams);
 
-  it('200 octet-stream, immutable, ETag = paramsHash; body round-trips to the local result', async () => {
+  it('200 gzipped BMV1, immutable, ETag = paramsHash; body round-trips to the local result', async () => {
     const res = await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams, `&v=${blastDataVersion(cfg)}`))), ctx(cfg.id));
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-type')).toBe('application/gzip');
     expect(res.headers.get('cache-control')).toBe('public, s-maxage=31536000, immutable');
     expect(res.headers.get('etag')).toBe(`"${expected.paramsHash}"`);
-    const movement = decodeMovement(await res.arrayBuffer(), model);
+    const movement = decodeMovement(await readPayload(res), model);
     expect(movement.paramsHash).toBe(expected.paramsHash);
     expect(Array.from(movement.end)).toEqual(Array.from(expected.end));
     expect(Array.from(movement.distance)).toEqual(Array.from(expected.distance));

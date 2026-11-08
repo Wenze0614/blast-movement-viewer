@@ -2,7 +2,7 @@
  * BMV1 binary codec (docs/02-plan.md ADR-11).
  */
 import { describe, expect, it } from 'vitest';
-import { BLAST_CONFIGS } from '../blasts';
+import { STANDARD_BLASTS } from '../blasts';
 import { generateBlockModel } from '../blockModel';
 import {
   BMV1_SCHEMA_VERSION,
@@ -17,7 +17,7 @@ import {
 import { computeMovement } from '../movement';
 import type { BlockModel } from '../types';
 
-const fixtures = BLAST_CONFIGS.map((cfg) => {
+const fixtures = STANDARD_BLASTS.map((cfg) => {
   const model = generateBlockModel(cfg);
   return { id: cfg.id, cfg, model, movement: computeMovement(model, cfg.defaultParams) };
 });
@@ -60,7 +60,7 @@ describe('BMV1 codec: round-trip (all three demo blasts)', () => {
   });
 
   it.each(fixtures)('$id movement: every field survives; displacement/distance derived on decode', ({ model, movement }) => {
-    const got = decodeMovement(encodeMovement(movement, model.configHash), model);
+    const got = decodeMovement(encodeMovement(movement, model), model);
     for (const k of ['start', 'end', 'displacement', 'distance', 'delay'] as const) {
       expect(bytesEqual(got[k], movement[k]), k).toBe(true);
     }
@@ -81,12 +81,39 @@ describe('BMV1 codec: round-trip (all three demo blasts)', () => {
     }
   });
 
-  it('model payload size matches the ADR-11 estimate plus the cell index (30 B/block + a small header)', () => {
-    for (const { model } of fixtures) {
-      const bytes = encodeModel(model).byteLength;
-      expect(bytes).toBeGreaterThanOrEqual(30 * model.count);
-      expect(bytes).toBeLessThan(30 * model.count + 2048);
+  it('v3 is compact: a generated model is grade + cell + rockType (9 B/block); a movement is slots (10 B/block)', () => {
+    for (const { model, movement } of fixtures) {
+      const m = encodeModel(model);
+      expect(readHeader(m).fields.map((f) => f.name)).toEqual(['grade', 'cell', 'rockType']);
+      expect(m.byteLength).toBeGreaterThanOrEqual(9 * model.count);
+      expect(m.byteLength).toBeLessThan(9 * model.count + 2048);
+      const v = encodeMovement(movement, model);
+      const surface = movement.surface.height.byteLength;
+      expect(v.byteLength).toBeLessThan(10 * model.count + surface + 2048);
     }
+  });
+
+  it('falls back to explicit sections when a field does not derive exactly (round trip stays exact)', () => {
+    const odd = {
+      ...small.model,
+      density: small.model.density.slice(),
+      tonnes: small.model.tonnes.slice(),
+      centroid: small.model.centroid.slice(),
+      oreClass: small.model.oreClass.slice(),
+    };
+    odd.density[7] = 3.1; // a second density for one rock type
+    odd.centroid[0] += 0.25; // off the grid formula
+    odd.oreClass[3] = odd.oreClass[3] === 0 ? 1 : 0; // disagrees with its grade
+    const buf = encodeModel(odd);
+    expect(readHeader(buf).fields.map((f) => f.name).sort()).toEqual(['cell', 'centroid', 'density', 'grade', 'oreClass', 'rockType', 'tonnes']);
+    expectModelEqual(decodeModel(buf), odd);
+    // a movement position off its slot formula → the explicit end section
+    const end = small.movement.end.slice();
+    end[2] += 0.01;
+    const mv = { ...small.movement, end };
+    const payload = encodeMovement(mv, small.model);
+    expect(readHeader(payload).fields.map((f) => f.name)).toContain('end');
+    expect(bytesEqual(decodeMovement(payload, small.model).end, end)).toBe(true);
   });
 });
 
@@ -106,15 +133,15 @@ describe('BMV1 codec: layout', () => {
   });
 
   it('aligns every section to 4 bytes; Float32, then Uint32, then Uint8 sections; no overlap', () => {
-    const order = { f32: 0, u32: 1, u8: 2 } as const;
-    for (const buf of [encodeModel(small.model), encodeMovement(small.movement, small.model.configHash)]) {
+    const order = { f32: 0, u32: 1, u16: 2, u8: 3 } as const;
+    for (const buf of [encodeModel(small.model), encodeMovement(small.movement, small.model)]) {
       const { fields } = readHeader(buf);
       let prevRank = 0;
       let prevEnd = 0;
       for (const f of fields) {
         expect(f.offset % 4, f.name).toBe(0);
         expect(f.offset).toBeGreaterThanOrEqual(prevEnd);
-        prevEnd = f.offset + f.length * (f.type === 'u8' ? 1 : 4);
+        prevEnd = f.offset + f.length * (f.type === 'u8' ? 1 : f.type === 'u16' ? 2 : 4);
         expect(order[f.type], `${f.name} out of type order`).toBeGreaterThanOrEqual(prevRank);
         prevRank = order[f.type];
       }
@@ -126,7 +153,7 @@ describe('BMV1 codec: layout', () => {
   it('model header carries configHash + seed; movement header carries params, hash, looseScale, grids', () => {
     const m = readHeader(encodeModel(small.model));
     expect(m).toMatchObject({ kind: 'model', configHash: small.model.configHash, seed: small.model.seed });
-    const v = readHeader(encodeMovement(small.movement, small.model.configHash));
+    const v = readHeader(encodeMovement(small.movement, small.model));
     expect(v).toMatchObject({
       kind: 'movement',
       paramsHash: small.movement.paramsHash,
@@ -135,18 +162,17 @@ describe('BMV1 codec: layout', () => {
       params: small.movement.params,
       postGrid: small.movement.postGrid,
     });
-    expect(v.fields.map((f) => f.name)).toEqual(['end', 'delay', 'surface.height']);
+    expect(v.fields.map((f) => f.name)).toEqual(['delay', 'surface.height', 'slotCell', 'slotLevel']);
   });
 
-  it('decode returns typed-array views on the input buffer (no copy)', () => {
+  it('decode returns typed-array views on the input buffer for sent sections (no copy); derived ones are built', () => {
     const buf = encodeModel(small.model);
     const model = decodeModel(buf.buffer);
-    for (const k of ['centroid', 'grade', 'density', 'tonnes', 'rockType', 'oreClass'] as const) {
-      expect(model[k].buffer).toBe(buf.buffer);
-    }
-    const mv = encodeMovement(small.movement, small.model.configHash);
+    for (const k of ['grade', 'cell', 'rockType'] as const) expect(model[k].buffer).toBe(buf.buffer);
+    for (const k of ['centroid', 'density', 'tonnes', 'oreClass'] as const) expect(model[k].buffer).not.toBe(buf.buffer);
+    const mv = encodeMovement(small.movement, small.model);
     const movement = decodeMovement(mv, model);
-    expect(movement.end.buffer).toBe(mv.buffer);
+    expect(movement.end.buffer).not.toBe(mv.buffer); // rebuilt from slots
     expect(movement.delay.buffer).toBe(mv.buffer);
     expect(movement.surface.height.buffer).toBe(mv.buffer);
     expect(movement.start).toBe(model.centroid);
@@ -179,13 +205,13 @@ describe('BMV1 codec: typed errors', () => {
     expectThrowsCode(() => decodeModel(model.slice(0, model.byteLength - 8)), 'TRUNCATED');
   });
 
-  it.each([1, 9])('schemaVersion %i (v1 = dense models before the cell index) → UNSUPPORTED_VERSION', (v) => {
-    expect(BMV1_SCHEMA_VERSION).toBe(2);
+  it.each([1, 2, 9])('schemaVersion %i (1: dense, 2: uncompacted) → UNSUPPORTED_VERSION', (v) => {
+    expect(BMV1_SCHEMA_VERSION).toBe(3);
     const bad = model.slice();
     const h = new DataView(bad.buffer).getUint32(4, true);
     const text = new TextDecoder().decode(bad.subarray(8, 8 + h));
-    expect(text).toContain('"schemaVersion":2,');
-    bad.set(new TextEncoder().encode(text.replace('"schemaVersion":2,', `"schemaVersion":${v},`)), 8);
+    expect(text).toContain('"schemaVersion":3,');
+    bad.set(new TextEncoder().encode(text.replace('"schemaVersion":3,', `"schemaVersion":${v},`)), 8);
     expectThrowsCode(() => decodeModel(bad), 'UNSUPPORTED_VERSION');
   });
 
@@ -245,13 +271,13 @@ describe('BMV1 codec: typed errors', () => {
   ];
 
   it.each(malformed)('malformed but valid-JSON header (%s) → BAD_HEADER, not a TypeError', (_name, kind, edit) => {
-    const buf = kind === 'model' ? encodeModel(small.model) : encodeMovement(small.movement, small.model.configHash);
+    const buf = kind === 'model' ? encodeModel(small.model) : encodeMovement(small.movement, small.model);
     const broken = withHeader(buf, edit);
     expectThrowsCode(() => (kind === 'model' ? decodeModel(broken) : decodeMovement(broken, small.model)), 'BAD_HEADER');
   });
 
   it('a movement decoded against a different model → MODEL_MISMATCH', () => {
-    const payload = encodeMovement(small.movement, small.model.configHash);
+    const payload = encodeMovement(small.movement, small.model);
     expectThrowsCode(() => decodeMovement(payload, fixtures[1].model), 'MODEL_MISMATCH');
   });
 

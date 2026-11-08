@@ -2,7 +2,7 @@ import { encodeMovement } from '@/core/codec';
 import { hashParams } from '@/core/hash';
 import { computeMovement, modelHashContext } from '@/core/movement';
 import { binaryCacheControl, blastEntry, findBlast, versionMismatch } from '@/server/blasts';
-import { apiError, binary, etagMatches, notModified } from '@/server/binary';
+import { apiError, binary, etagMatches, gzip, notModified } from '@/server/binary';
 import { issueDetails, MovementQuery, queryObject } from '@/server/schemas';
 
 /**
@@ -28,7 +28,7 @@ export async function GET(req: Request, ctx: RouteContext<'/api/blasts/[id]/move
   if (etagMatches(req.headers.get('if-none-match'), etag)) return notModified({ cacheControl, etag });
   try {
     const result = computeMovement(model, q.data);
-    return binary(encodeMovement(result, model.configHash), { cacheControl, etag: result.paramsHash });
+    return binary(await gzip(encodeMovement(result, model)), { cacheControl, etag: result.paramsHash });
   } catch (err) {
     console.error('[api] movement failed', err);
     return apiError('INTERNAL', 'Movement computation failed', 500);

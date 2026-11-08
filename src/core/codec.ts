@@ -13,24 +13,35 @@
  * the START OF THE PAYLOAD and `length` in elements. Decode returns typed-array VIEWS on the input
  * buffer (no copies), so a decoded model goes straight to GPU attributes.
  *
- * - model:    centroid (f32 3N), grade, density, tonnes (f32 N), cell (u32 N), rockType,
- *             oreClass (u8 N). Header: count, grid (the bounding grid: count ≤ nx·ny·nz),
- *             grades, pattern (burden/spacing drive the firing sequence), seed, configHash
- *             (computeMovement needs it, ADR-12). `cell` holds each
- *             block's grid cell index, strictly increasing (schema v2: sparse models).
- * - movement: end (f32 3N), delay (f32 N), surface.height (f32 nx·ny).
- *             Header: count, params, paramsHash, looseScale, postGrid, surface spec and the model
- *             configHash it was computed from. `start` is the model's centroid; `displacement`
- *             and `distance` are derived on decode (they are not sent).
+ * Schema v3 is compact: a field that can be DERIVED is sent only if deriving it does not
+ * reproduce it bit for bit (the encoder checks), so a round trip is always exact.
+ *
+ * - model:    grade (f32 N), cell (u32 N, strictly increasing grid cell index), rockType (u8 N);
+ *             optional centroid (f32 3N; else origin + (ijk + ½)·blockSize from cell), density
+ *             and tonnes (f32 N; else header byRock[rockType]), oreClass (u8 N; else from grade
+ *             and grades). About 9 B per generated block instead of 30.
+ *             Header: count, grid (the bounding grid: count ≤ nx·ny·nz), grades, pattern
+ *             (burden/spacing drive the firing sequence), byRock, seed, configHash (ADR-12).
+ * - movement: delay (f32 N), surface.height (f32 nx·ny), and either slotCell (u32 N, post-grid
+ *             cell) + slotLevel (u16 N, stack level) or, if some position does not reproduce
+ *             from its slot, end (f32 3N). Header: count, params, paramsHash, looseScale,
+ *             postGrid, surface spec and the model configHash it was computed from. `start` is
+ *             the model's centroid; `end` (from slots), `displacement` and `distance` are derived
+ *             on decode.
  *
  * Byte order: sections are written and read through typed arrays, which use the platform order.
  * Every supported platform (x86, ARM, WASM) is little-endian; a big-endian host throws.
  */
+import { classifyGrade } from './blockModel';
+import { slotPosition } from './movement';
 import type { BlastParameters, BlastPattern, BlockModel, GradeSettings, GridSpec, MovementResult, Vec2 } from './types';
 
 export const BMV1_MAGIC = 'BMV1';
-/** v2: sparse models (the `cell` section). v1 payloads are rejected (UNSUPPORTED_VERSION). */
-export const BMV1_SCHEMA_VERSION = 2;
+/**
+ * v2: sparse models (the `cell` section). v3: compact (derivable fields sent only when they do
+ * not derive exactly; movement as slots). Older payloads are rejected (UNSUPPORTED_VERSION).
+ */
+export const BMV1_SCHEMA_VERSION = 3;
 /** Bytes before the header JSON: magic + uint32 header length. */
 const PREAMBLE = 8;
 
@@ -55,7 +66,7 @@ export class CodecError extends Error {
   }
 }
 
-export type FieldType = 'f32' | 'u32' | 'u8';
+export type FieldType = 'f32' | 'u32' | 'u16' | 'u8';
 
 export interface FieldSpec {
   name: string;
@@ -78,6 +89,12 @@ export interface ModelHeader extends HeaderBase {
   grid: GridSpec;
   grades: GradeSettings;
   pattern: BlastPattern;
+  /**
+   * Per RockType (index), the density (t/m³) and tonnes of every block of that type, when the
+   * model has one value per type (generated models do) and the `density` / `tonnes` sections are
+   * therefore not sent. Null when they are sent.
+   */
+  byRock: { density: number[]; tonnes: number[] } | null;
   seed: number;
   configHash: string;
 }
@@ -97,7 +114,7 @@ export type Bmv1Header = ModelHeader | MovementHeader;
 /** What a caller supplies to encode(): a header without the codec-owned keys. */
 type HeaderMeta = Omit<ModelHeader, 'schemaVersion' | 'fields'> | Omit<MovementHeader, 'schemaVersion' | 'fields'>;
 
-const BYTES: Record<FieldType, number> = { f32: 4, u32: 4, u8: 1 };
+const BYTES: Record<FieldType, number> = { f32: 4, u32: 4, u16: 2, u8: 1 };
 const align4 = (n: number) => (n + 3) & ~3;
 
 function assertLittleEndian(): void {
@@ -106,14 +123,14 @@ function assertLittleEndian(): void {
   }
 }
 
-type SectionData = Float32Array | Uint32Array | Uint8Array;
+type SectionData = Float32Array | Uint32Array | Uint16Array | Uint8Array;
 type Section = { name: string; data: SectionData };
 
 const typeOf = (data: SectionData): FieldType =>
-  data instanceof Float32Array ? 'f32' : data instanceof Uint32Array ? 'u32' : 'u8';
-const SECTION_ORDER: readonly FieldType[] = ['f32', 'u32', 'u8'];
+  data instanceof Float32Array ? 'f32' : data instanceof Uint32Array ? 'u32' : data instanceof Uint16Array ? 'u16' : 'u8';
+const SECTION_ORDER: readonly FieldType[] = ['f32', 'u32', 'u16', 'u8'];
 
-/** Lay out sections (Float32, Uint32, then Uint8; each 4-byte aligned) behind a padded JSON header. */
+/** Lay out sections (Float32, Uint32, Uint16, then Uint8; each 4-byte aligned) behind a padded JSON header. */
 function encode(meta: HeaderMeta, sections: Section[]): Uint8Array<ArrayBuffer> {
   assertLittleEndian();
   const ordered = SECTION_ORDER.flatMap((t) => sections.filter((s) => typeOf(s.data) === t));
@@ -148,6 +165,7 @@ function encode(meta: HeaderMeta, sections: Section[]): Uint8Array<ArrayBuffer> 
     const f = fields[i];
     if (s.data instanceof Float32Array) new Float32Array(out.buffer, f.offset, f.length).set(s.data);
     else if (s.data instanceof Uint32Array) new Uint32Array(out.buffer, f.offset, f.length).set(s.data);
+    else if (s.data instanceof Uint16Array) new Uint16Array(out.buffer, f.offset, f.length).set(s.data);
     else out.set(s.data, f.offset);
   });
   return out;
@@ -155,6 +173,18 @@ function encode(meta: HeaderMeta, sections: Section[]): Uint8Array<ArrayBuffer> 
 
 export function encodeModel(model: BlockModel): Uint8Array<ArrayBuffer> {
   if (!model.configHash) throw new TypeError('encodeModel: model.configHash is required');
+  const sections: Section[] = [
+    { name: 'grade', data: model.grade },
+    { name: 'cell', data: model.cell },
+    { name: 'rockType', data: model.rockType },
+  ];
+  // Each derived field is sent only if deriving it does NOT reproduce it bit for bit.
+  if (!sameF32(deriveCentroid(model.grid, model.cell), model.centroid)) sections.push({ name: 'centroid', data: model.centroid });
+  const byRock = rockConstants(model);
+  if (!byRock) {
+    sections.push({ name: 'density', data: model.density }, { name: 'tonnes', data: model.tonnes });
+  }
+  if (!sameU8(deriveOreClass(model.grade, model.grades), model.oreClass)) sections.push({ name: 'oreClass', data: model.oreClass });
   return encode(
     {
       kind: 'model',
@@ -162,41 +192,125 @@ export function encodeModel(model: BlockModel): Uint8Array<ArrayBuffer> {
       grid: model.grid,
       grades: model.grades,
       pattern: model.pattern,
+      byRock,
       seed: model.seed,
       configHash: model.configHash,
     },
-    [
-      { name: 'centroid', data: model.centroid },
-      { name: 'grade', data: model.grade },
-      { name: 'density', data: model.density },
-      { name: 'tonnes', data: model.tonnes },
-      { name: 'cell', data: model.cell },
-      { name: 'rockType', data: model.rockType },
-      { name: 'oreClass', data: model.oreClass },
-    ],
+    sections,
   );
 }
 
-/** `modelConfigHash`: the configHash of the model the movement was computed from. */
-export function encodeMovement(movement: MovementResult, modelConfigHash: string): Uint8Array<ArrayBuffer> {
+const sameF32 = (a: Float32Array, b: Float32Array) => {
+  if (a.length !== b.length) return false;
+  const x = new Uint32Array(a.buffer, a.byteOffset, a.length);
+  const y = new Uint32Array(b.buffer, b.byteOffset, b.length);
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
+};
+const sameU8 = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/** Centroids from grid cells: origin + (ijk + ½) · blockSize, exactly as the generator writes them. */
+export function deriveCentroid(grid: GridSpec, cell: Uint32Array): Float32Array {
+  const { nx, ny } = grid;
+  const [ox, oy, oz] = grid.origin;
+  const [bx, by, bz] = grid.blockSize;
+  const out = new Float32Array(3 * cell.length);
+  for (let n = 0; n < cell.length; n++) {
+    const c = cell[n];
+    const i = c % nx;
+    const r = (c - i) / nx;
+    const j = r % ny;
+    const k = (r - j) / ny;
+    out[3 * n] = ox + (i + 0.5) * bx;
+    out[3 * n + 1] = oy + (j + 0.5) * by;
+    out[3 * n + 2] = oz + (k + 0.5) * bz;
+  }
+  return out;
+}
+
+/** Pre-blast class per block from its stored grade (classifyGrade, as the generator does). */
+export function deriveOreClass(grade: Float32Array, grades: GradeSettings): Uint8Array {
+  const out = new Uint8Array(grade.length);
+  for (let n = 0; n < grade.length; n++) out[n] = classifyGrade(grade[n], grades);
+  return out;
+}
+
+/** One (density, tonnes) per rock type, or null if some rock type has more than one value. */
+function rockConstants(model: BlockModel): { density: number[]; tonnes: number[] } | null {
+  const density: number[] = [];
+  const tonnes: number[] = [];
+  for (let n = 0; n < model.count; n++) {
+    const r = model.rockType[n];
+    if (density[r] === undefined) {
+      density[r] = model.density[n];
+      tonnes[r] = model.tonnes[n];
+    } else if (!Object.is(density[r], model.density[n]) || !Object.is(tonnes[r], model.tonnes[n])) {
+      return null;
+    }
+  }
+  for (let r = 0; r < density.length; r++) {
+    if (density[r] === undefined) {
+      density[r] = 0; // a rock type no block has (keeps the arrays dense for JSON)
+      tonnes[r] = 0;
+    }
+  }
+  return { density, tonnes };
+}
+
+/**
+ * Encode a movement computed for `model`. Final positions are sent as post-blast slots (post-grid
+ * cell + stack level, the canonical slotPosition formula) when every block's position reproduces
+ * exactly from its slot; otherwise the explicit `end` section is sent instead.
+ */
+export function encodeMovement(movement: MovementResult, model: BlockModel): Uint8Array<ArrayBuffer> {
   const { surface } = movement;
+  const n = movement.delay.length;
+  const slots = toSlots(movement, model);
+  const sections: Section[] = [
+    { name: 'delay', data: movement.delay },
+    { name: 'surface.height', data: surface.height },
+  ];
+  if (slots) sections.push({ name: 'slotCell', data: slots.cell }, { name: 'slotLevel', data: slots.level });
+  else sections.push({ name: 'end', data: movement.end });
   return encode(
     {
       kind: 'movement',
-      count: movement.delay.length,
+      count: n,
       params: movement.params,
       paramsHash: movement.paramsHash,
       looseScale: movement.looseScale,
       postGrid: movement.postGrid,
       surface: { origin: surface.origin, cellSize: surface.cellSize, nx: surface.nx, ny: surface.ny },
-      modelConfigHash,
+      modelConfigHash: model.configHash,
     },
-    [
-      { name: 'end', data: movement.end },
-      { name: 'delay', data: movement.delay },
-      { name: 'surface.height', data: surface.height },
-    ],
+    sections,
   );
+}
+
+/** Stacked block height of a movement on `model` (as the movement computes it). */
+const stackHeightOf = (model: BlockModel, looseScale: number) => model.grid.blockSize[2] * looseScale;
+
+/** Slots (cell, level) reproducing every final position exactly, or null. */
+function toSlots(movement: MovementResult, model: BlockModel): { cell: Uint32Array; level: Uint16Array } | null {
+  const g = movement.postGrid;
+  const n = movement.delay.length;
+  const zToe = model.grid.origin[2];
+  const hb = stackHeightOf(model, movement.looseScale);
+  const cell = new Uint32Array(n);
+  const level = new Uint16Array(n);
+  const probe = new Float32Array(3);
+  const end = movement.end;
+  for (let b = 0; b < n; b++) {
+    const ix = Math.round((end[3 * b] - g.origin[0]) / g.cellSize - 0.5);
+    const iy = Math.round((end[3 * b + 1] - g.origin[1]) / g.cellSize - 0.5);
+    const lv = Math.round((end[3 * b + 2] - zToe) / hb - 0.5);
+    if (ix < 0 || ix >= g.nx || iy < 0 || iy >= g.ny || lv < 0 || lv > 0xffff) return null;
+    cell[b] = ix + g.nx * iy;
+    level[b] = lv;
+    slotPosition(g, zToe, hb, cell[b], lv, probe, 0);
+    if (!Object.is(probe[0], end[3 * b]) || !Object.is(probe[1], end[3 * b + 1]) || !Object.is(probe[2], end[3 * b + 2])) return null;
+  }
+  return { cell, level };
 }
 
 // ── Decode ──────────────────────────────────────────────────────────────────
@@ -246,7 +360,7 @@ function parseHeader(buffer: ArrayBuffer, base: number, byteLength: number): Bmv
   if (!Array.isArray(header.fields)) throw new CodecError('BAD_HEADER', 'fields must be an array');
   const dataStart = PREAMBLE + headerBytes;
   for (const f of header.fields) {
-    if (f.type !== 'f32' && f.type !== 'u32' && f.type !== 'u8') throw new CodecError('BAD_HEADER', `field ${f.name}: unknown type ${String(f.type)}`);
+    if (f.type !== 'f32' && f.type !== 'u32' && f.type !== 'u16' && f.type !== 'u8') throw new CodecError('BAD_HEADER', `field ${f.name}: unknown type ${String(f.type)}`);
     if (!Number.isInteger(f.offset) || f.offset < dataStart || f.offset % 4 !== 0) {
       throw new CodecError('BAD_HEADER', `field ${f.name}: offset ${f.offset} is not an aligned section offset`);
     }
@@ -268,15 +382,29 @@ function views(buffer: ArrayBuffer, base: number, header: Bmv1Header, expect: Re
     if (f.type !== type || f.length !== length) {
       throw new CodecError('BAD_HEADER', `field ${name}: expected ${type}[${length}], got ${f.type}[${f.length}]`);
     }
-    const at = base + f.offset;
-    out[name] =
-      type === 'f32'
-        ? new Float32Array(buffer, at, length)
-        : type === 'u32'
-          ? new Uint32Array(buffer, at, length)
-          : new Uint8Array(buffer, at, length);
+    out[name] = viewOf(buffer, base + f.offset, type, length);
   }
   return out;
+}
+
+function viewOf(buffer: ArrayBuffer, at: number, type: FieldType, length: number): SectionData {
+  return type === 'f32'
+    ? new Float32Array(buffer, at, length)
+    : type === 'u32'
+      ? new Uint32Array(buffer, at, length)
+      : type === 'u16'
+        ? new Uint16Array(buffer, at, length)
+        : new Uint8Array(buffer, at, length);
+}
+
+/** A view on an OPTIONAL section (sent only when it cannot be derived), or null if absent. */
+function optionalView(buffer: ArrayBuffer, base: number, header: Bmv1Header, name: string, type: FieldType, length: number) {
+  const f = header.fields.find((x) => x.name === name);
+  if (!f) return null;
+  if (f.type !== type || f.length !== length) {
+    throw new CodecError('BAD_HEADER', `field ${name}: expected ${type}[${length}], got ${f.type}[${f.length}]`);
+  }
+  return viewOf(buffer, base + f.offset, type, length);
 }
 
 // ── Header shape checks: a header that is valid JSON but malformed throws BAD_HEADER, never a
@@ -362,16 +490,10 @@ export function decodeModel(input: Input): BlockModel {
   const header = h as ModelHeader;
   checkModelHeader(header);
   const n = header.count;
-  const v = views(buffer, base, header, {
-    centroid: ['f32', 3 * n],
-    grade: ['f32', n],
-    density: ['f32', n],
-    tonnes: ['f32', n],
-    cell: ['u32', n],
-    rockType: ['u8', n],
-    oreClass: ['u8', n],
-  });
+  const v = views(buffer, base, header, { grade: ['f32', n], cell: ['u32', n], rockType: ['u8', n] });
   const cell = v.cell as Uint32Array;
+  const grade = v.grade as Float32Array;
+  const rockType = v.rockType as Uint8Array;
   const { nx, ny, nz } = header.grid;
   const cells = nx * ny * nz;
   for (let b = 0; b < n; b++) {
@@ -379,18 +501,34 @@ export function decodeModel(input: Input): BlockModel {
       throw new CodecError('BAD_DATA', `cell[${b}] = ${cell[b]} is not a strictly increasing grid cell index`);
     }
   }
+  const centroid = (optionalView(buffer, base, header, 'centroid', 'f32', 3 * n) as Float32Array | null) ?? deriveCentroid(header.grid, cell);
+  let density = optionalView(buffer, base, header, 'density', 'f32', n) as Float32Array | null;
+  let tonnes = optionalView(buffer, base, header, 'tonnes', 'f32', n) as Float32Array | null;
+  if (!density || !tonnes) {
+    const byRock = header.byRock;
+    if (!byRock) throw new CodecError('BAD_HEADER', 'byRock is required when density/tonnes are not sent');
+    density = new Float32Array(n);
+    tonnes = new Float32Array(n);
+    for (let b = 0; b < n; b++) {
+      const r = rockType[b];
+      if (r >= byRock.density.length) throw new CodecError('BAD_DATA', `rockType[${b}] = ${r} has no byRock entry`);
+      density[b] = byRock.density[r];
+      tonnes[b] = byRock.tonnes[r];
+    }
+  }
+  const oreClass = (optionalView(buffer, base, header, 'oreClass', 'u8', n) as Uint8Array | null) ?? deriveOreClass(grade, header.grades);
   return {
     grid: header.grid,
     grades: header.grades,
     count: n,
     cell,
     pattern: header.pattern,
-    centroid: v.centroid as Float32Array,
-    grade: v.grade as Float32Array,
-    density: v.density as Float32Array,
-    tonnes: v.tonnes as Float32Array,
-    rockType: v.rockType as Uint8Array,
-    oreClass: v.oreClass as Uint8Array,
+    centroid,
+    grade,
+    density,
+    tonnes,
+    rockType,
+    oreClass,
     seed: header.seed,
     configHash: header.configHash,
   };
@@ -414,12 +552,24 @@ export function decodeMovement(input: Input, model: BlockModel): MovementResult 
   const n = header.count;
   const s = header.surface;
   const v = views(buffer, base, header, {
-    end: ['f32', 3 * n],
     delay: ['f32', n],
     'surface.height': ['f32', s.nx * s.ny],
   });
+  let end = optionalView(buffer, base, header, 'end', 'f32', 3 * n) as Float32Array | null;
+  if (!end) {
+    const slotCell = optionalView(buffer, base, header, 'slotCell', 'u32', n) as Uint32Array | null;
+    const slotLevel = optionalView(buffer, base, header, 'slotLevel', 'u16', n) as Uint16Array | null;
+    if (!slotCell || !slotLevel) throw new CodecError('BAD_HEADER', 'missing field end (or slotCell + slotLevel)');
+    const g = header.postGrid;
+    const zToe = model.grid.origin[2];
+    const hb = stackHeightOf(model, header.looseScale);
+    end = new Float32Array(3 * n);
+    for (let b = 0; b < n; b++) {
+      if (slotCell[b] >= g.nx * g.ny) throw new CodecError('BAD_DATA', `slotCell[${b}] = ${slotCell[b]} is outside the post grid`);
+      slotPosition(g, zToe, hb, slotCell[b], slotLevel[b], end, 3 * b);
+    }
+  }
   const start = model.centroid;
-  const end = v.end as Float32Array;
   const displacement = new Float32Array(3 * n);
   const distance = new Float32Array(n);
   for (let b = 0; b < n; b++) {

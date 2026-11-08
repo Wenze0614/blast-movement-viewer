@@ -22,7 +22,7 @@ type Handler = (url: URL, init?: RequestInit) => Promise<Response>;
 const serve: Handler = async (url) => {
   if (url.pathname === '/api/blasts') return Response.json([{ id: ID }]);
   if (url.pathname.endsWith('/model')) return new Response(encodeModel(model));
-  if (url.pathname.endsWith('/movement')) return new Response(encodeMovement(movement, model.configHash));
+  if (url.pathname.endsWith('/movement')) return new Response(encodeMovement(movement, model));
   return Response.json({ error: { code: 'NOT_FOUND', message: 'nope' } }, { status: 404 });
 };
 
@@ -66,7 +66,7 @@ describe('ApiDataSource', () => {
     ['409 STALE_VERSION', async () => Response.json({ error: { code: 'STALE_VERSION', message: 'old v' } }, { status: 409 })],
     ['a movement for another model (MODEL_MISMATCH)', async () => {
       const other = generateBlockModel({ ...cfg, seed: cfg.seed + 1 });
-      return new Response(encodeMovement(computeMovement(other, params), other.configHash));
+      return new Response(encodeMovement(computeMovement(other, params), other));
     }],
   ] as const)('%s on the movement drops the cached API model, so the next getModel refetches', async (_name, movementResponse) => {
     let failMovement = true;
@@ -155,7 +155,7 @@ describe('FallbackDataSource (automatic fallback to local)', () => {
 
   it('listBlasts / getBlast fall back too (without changing kind)', async () => {
     const ds = new FallbackDataSource(new ApiDataSource({ fetch: fakeFetch(() => Promise.reject(new TypeError('x'))) }));
-    expect((await ds.listBlasts()).length).toBe(3);
+    expect((await ds.listBlasts()).length).toBe(4);
     expect((await ds.getBlast(ID)).id).toBe(ID);
     expect(ds.kind).toBe('api');
   });

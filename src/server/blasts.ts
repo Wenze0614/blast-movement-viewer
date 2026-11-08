@@ -9,12 +9,13 @@ import { encodeModel } from '@/core/codec';
 import { buildBlastDetail, buildBlastSummary } from '@/core/holes';
 import type { BlastDetail, BlastSummary } from '@/core/api-types';
 import type { BlockModel } from '@/core/types';
-import { apiError, CACHE } from './binary';
+import { apiError, CACHE, gzip } from './binary';
 
 interface Entry {
   model: BlockModel;
   detail: BlastDetail;
-  modelBinary: Uint8Array<ArrayBuffer>;
+  /** The encoded model, gzipped once (see binary()). */
+  modelGzip: Promise<Uint8Array<ArrayBuffer>>;
 }
 
 const cache = new Map<string, Entry>();
@@ -58,7 +59,7 @@ export function blastEntry(cfg: BlastConfig): Entry {
   let e = cache.get(cfg.id);
   if (!e) {
     const model = generateBlockModel(cfg);
-    e = { model, detail: buildBlastDetail(cfg, model), modelBinary: encodeModel(model) };
+    e = { model, detail: buildBlastDetail(cfg, model), modelGzip: gzip(encodeModel(model)) };
     cache.set(cfg.id, e);
   }
   return e;

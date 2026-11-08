@@ -44,8 +44,9 @@ import type { BlastParameters, BlockModel, GridSpec, Heightfield, MovementResult
  * output for the same model + params, so immutable cached responses keyed on paramsHash expire.
  * v2: irregular footprints (per-strip free face, rock confined by the unblasted ground).
  * v3: throw direction and animation delay from the firing sequence (timing.ts).
+ * v4: final positions from the canonical slot formula (slotPosition), so the codec can send slots.
  */
-export const MOVEMENT_MODEL_VERSION = 3;
+export const MOVEMENT_MODEL_VERSION = 4;
 
 /** ADR-3 step 4: stop after 20·N block moves even if not fully relaxed. */
 export const RELAXATION_MOVE_FACTOR = 20;
@@ -141,6 +142,28 @@ class MaxHeap {
     }
     return top;
   }
+}
+
+/**
+ * The canonical centroid of post-blast slot (world post-grid cell, stack level), written into
+ * `out[o..o+2]`: cell centre in plan, (level + ½) stacked block heights above the toe. Both the
+ * movement and the codec (which sends slots instead of positions) use this one formula, so a
+ * decoded position is bit-identical to the computed one.
+ */
+export function slotPosition(
+  postGrid: MovementResult['postGrid'],
+  zToe: number,
+  stackHeight: number,
+  cell: number,
+  level: number,
+  out: Float32Array,
+  o: number,
+): void {
+  const ix = cell % postGrid.nx;
+  const iy = (cell - ix) / postGrid.nx;
+  out[o] = postGrid.origin[0] + (ix + 0.5) * postGrid.cellSize;
+  out[o + 1] = postGrid.origin[1] + (iy + 0.5) * postGrid.cellSize;
+  out[o + 2] = zToe + (level + 0.5) * stackHeight;
 }
 
 export function computeMovement(model: BlockModel, params: BlastParameters): MovementResult {
@@ -450,13 +473,7 @@ export function computeMovementDetailed(
     surfaceHeight[w] = st.length * hb;
     if (st.length === 0) continue;
     st.sort((u, v) => rank[u] - rank[v]);
-    const [cx, cy] = frame.toWorld((ia + 0.5) * cell, (ib - mLat + 0.5) * cell);
-    for (let lvl = 0; lvl < st.length; lvl++) {
-      const id = st[lvl];
-      end[3 * id] = cx;
-      end[3 * id + 1] = cy;
-      end[3 * id + 2] = zToe + (lvl + 0.5) * hb;
-    }
+    for (let lvl = 0; lvl < st.length; lvl++) slotPosition(postGrid, zToe, hb, w, lvl, end, 3 * st[lvl]);
   }
 
   const start = new Float32Array(model.centroid);

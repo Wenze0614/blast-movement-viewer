@@ -93,6 +93,14 @@ describe('BMV1 codec: round-trip (all three demo blasts)', () => {
     }
   });
 
+  it('a zero-block model (an outline holding no cell centre) round-trips (Codex review)', () => {
+    const empty = generateBlockModel({ ...fixtures[0].cfg, outline: [[0.1, 0.1], [0.2, 0.1], [0.2, 0.2]] });
+    expect(empty.count).toBe(0);
+    const back = decodeModel(encodeModel(empty));
+    expect(back.count).toBe(0);
+    expectModelEqual(back, empty);
+  });
+
   it('falls back to explicit sections when a field does not derive exactly (round trip stays exact)', () => {
     const odd = {
       ...small.model,

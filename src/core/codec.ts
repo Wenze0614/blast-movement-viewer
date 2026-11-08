@@ -235,8 +235,12 @@ export function deriveOreClass(grade: Float32Array, grades: GradeSettings): Uint
   return out;
 }
 
-/** One (density, tonnes) per rock type, or null if some rock type has more than one value. */
+/**
+ * One (density, tonnes) per rock type, or null if some rock type has more than one value. Null for
+ * an empty model too: it then sends (empty) density and tonnes sections, which round-trip as is.
+ */
 function rockConstants(model: BlockModel): { density: number[]; tonnes: number[] } | null {
+  if (model.count === 0) return null;
   const density: number[] = [];
   const tonnes: number[] = [];
   for (let n = 0; n < model.count; n++) {

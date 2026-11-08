@@ -77,3 +77,56 @@ export function packClassColours(
   }
   return out;
 }
+
+/** Entries in a ramp lookup table (viridis): 256 steps is finer than the eye can tell apart. */
+export const RAMP_LUT_SIZE = 256;
+
+/** Sample an sRGB ramp into a linear-RGB LUT (3 × size), so packing does no per-block pow(). */
+export function rampLut(ramp: (t: number) => [number, number, number], size = RAMP_LUT_SIZE): Float32Array {
+  const lut = new Float32Array(size * 3);
+  for (let i = 0; i < size; i++) {
+    const c = ramp(i / (size - 1));
+    lut[3 * i] = srgbToLinear(c[0]);
+    lut[3 * i + 1] = srgbToLinear(c[1]);
+    lut[3 * i + 2] = srgbToLinear(c[2]);
+  }
+  return lut;
+}
+
+/**
+ * aColor for a continuous value (movement mode: displacement distance, m) through a linear-RGB
+ * LUT: min → first entry, max → last; a degenerate range paints everything with the first entry.
+ */
+export function packRampColours(
+  values: Float32Array,
+  range: readonly [number, number],
+  lut: Float32Array,
+  out: Float32Array = new Float32Array(values.length * 3),
+): Float32Array {
+  if (out.length !== values.length * 3) throw new Error('packRampColours: out has the wrong length');
+  const last = lut.length / 3 - 1;
+  const [min, max] = range;
+  const scale = max > min ? last / (max - min) : 0;
+  for (let i = 0; i < values.length; i++) {
+    let k = Math.round((values[i] - min) * scale);
+    k = k < 0 ? 0 : k > last ? last : k;
+    out[3 * i] = lut[3 * k];
+    out[3 * i + 1] = lut[3 * k + 1];
+    out[3 * i + 2] = lut[3 * k + 2];
+  }
+  return out;
+}
+
+/**
+ * aOre (P3 "ore only"): 1 if grade ≥ cut-off (the true class core reconcile uses), else 0. Built
+ * with the geometry; toggling ore-only flips a uniform and never touches this buffer.
+ */
+export function packOreFlags(
+  grade: Float32Array,
+  cutoff: number,
+  out: Float32Array = new Float32Array(grade.length),
+): Float32Array {
+  if (out.length !== grade.length) throw new Error('packOreFlags: out has the wrong length');
+  for (let i = 0; i < grade.length; i++) out[i] = grade[i] >= cutoff ? 1 : 0;
+  return out;
+}

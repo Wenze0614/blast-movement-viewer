@@ -8,11 +8,14 @@ import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { LocalDataSource } from '@/data';
 import { computeDerived } from '@/state/derive';
+import { GRADE_PALETTE, OUTCOME_PALETTE } from '@/state/palette';
+import { distanceRange, outcomeClasses } from '@/state/views';
 import { createAppStore, type AppStore } from '@/state/store';
 import { createDisposeBag } from '../disposeBag';
 import { createEngine } from '../Engine';
 import type { RendererLike } from '../context';
 import { createBlocksSystem } from '../systems/blocks';
+import { hexToLinearRgb } from '../systems/blocksAttributes';
 import { createDigLinesSystem } from '../systems/digLines';
 import { createEnvironmentSystem } from '../systems/environment';
 import { createPlaybackSystem } from '../systems/playback';
@@ -114,19 +117,6 @@ describe('blocks system (M2/M4)', () => {
     expect(meshes(ctx.scene)).toHaveLength(1);
   });
 
-  it('colour-mode change rewrites aColor in place (no rebuild)', async () => {
-    const ctx = mockCtx();
-    const system = createBlocksSystem(ctx, {});
-    await system.init?.();
-    ctx.store.getState().setModel(model, 'local');
-    const geo = meshes(ctx.scene)[0].geometry;
-    const attr = geo.getAttribute('aColor') as THREE.InstancedBufferAttribute;
-    const version = attr.version;
-    ctx.store.getState().setColourMode('outcome');
-    expect(meshes(ctx.scene)[0].geometry).toBe(geo);
-    expect(attr.version).toBe(version + 1);
-  });
-
   it('dispose releases geometry, material and subscriptions and empties the scene', async () => {
     const ctx = mockCtx();
     const system = createBlocksSystem(ctx, {});
@@ -145,6 +135,175 @@ describe('blocks system (M2/M4)', () => {
     vi.mocked(ctx.invalidate).mockClear();
     ctx.store.getState().setProgress(0.9); // unsubscribed: no more work after dispose
     expect(ctx.invalidate).not.toHaveBeenCalled();
+  });
+});
+
+describe('blocks system: P1 colour modes and P3 section / ore only', () => {
+  const derived = computeDerived(model, movement);
+
+  /** Blocks system with model + movement + derived polygons loaded (the steady state). */
+  async function loaded(store: AppStore = createAppStore()) {
+    const ctx = mockCtx(store);
+    const system = createBlocksSystem(ctx, {});
+    await system.init?.();
+    store.getState().setModel(model, 'local');
+    store.getState().setMovement(movement, 'local');
+    store.getState().setDerived(derived.polygons, derived.reconciliation);
+    const mesh = meshes(ctx.scene)[0];
+    const geo = mesh.geometry as THREE.InstancedBufferGeometry;
+    const colour = geo.getAttribute('aColor') as THREE.InstancedBufferAttribute;
+    const u = (mesh.material as THREE.ShaderMaterial).uniforms;
+    return { ctx, system, store, mesh, geo, colour, u };
+  }
+  const rgb = (attr: THREE.InstancedBufferAttribute, b: number) => [attr.getX(b), attr.getY(b), attr.getZ(b)];
+  const lin = (hex: string) => Array.from(new Float32Array(hexToLinearRgb(hex)));
+
+  it('each mode change rewrites aColor ONCE in place: same geometry, still one mesh (one draw call)', async () => {
+    const { store, ctx, mesh, geo, colour } = await loaded();
+    for (const mode of ['outcome', 'movement', 'grade', 'outcome'] as const) {
+      const v = colour.version;
+      store.getState().setColourMode(mode);
+      expect(colour.version, mode).toBe(v + 1);
+      expect(mesh.geometry).toBe(geo);
+      expect(geo.getAttribute('aColor')).toBe(colour);
+    }
+    expect(meshes(ctx.scene)).toHaveLength(1);
+  });
+
+  it('outcome colours: in situ vs original at progress 0 (one block of each class checked)', async () => {
+    const { store, colour } = await loaded();
+    store.getState().setColourMode('outcome');
+    const classes = outcomeClasses(model, movement, derived.polygons, 'insitu_original');
+    for (let o = 0; o < 4; o++) {
+      const b = classes.indexOf(o);
+      if (b < 0) continue; // in situ, ore lost / dilution may be rare; post-blast covers them below
+      expect(rgb(colour, b)).toEqual(lin(OUTCOME_PALETTE[o as 0 | 1 | 2 | 3].hex));
+    }
+  });
+
+  it('outcome mode mid-scrub: repaints once as the blast starts (fate colours), never per frame', async () => {
+    const { store, system, colour } = await loaded();
+    store.getState().setColourMode('outcome');
+    const v = colour.version;
+    for (const p of [0.01, 0.2, 0.5, 0.9, 1]) {
+      store.getState().setProgress(p);
+      system.update?.({ dt: 0.016, elapsed: p, frame: 1 });
+    }
+    expect(colour.version).toBe(v + 1);
+    const post = outcomeClasses(model, movement, derived.polygons, 'post_original');
+    for (let o = 0; o < 4; o++) {
+      const b = post.indexOf(o);
+      expect(b, `class ${o} present post-blast`).toBeGreaterThanOrEqual(0);
+      expect(rgb(colour, b)).toEqual(lin(OUTCOME_PALETTE[o as 0 | 1 | 2 | 3].hex));
+    }
+    store.getState().setProgress(0); // back to the planning view
+    expect(colour.version).toBe(v + 2);
+  });
+
+  it('outcome line: switches the post-blast view once; at progress 0 it changes nothing', async () => {
+    const { store, colour } = await loaded();
+    store.getState().setColourMode('outcome');
+    let v = colour.version;
+    store.getState().setOutcomeLine('adjusted'); // in situ always uses the original line
+    expect(colour.version).toBe(v);
+    store.getState().setProgress(1);
+    expect(colour.version).toBe(++v);
+    const adj = outcomeClasses(model, movement, derived.polygons, 'post_adjusted');
+    expect(rgb(colour, adj.indexOf(0))).toEqual(lin(OUTCOME_PALETTE[0].hex));
+    store.getState().setOutcomeLine('original');
+    expect(colour.version).toBe(++v);
+  });
+
+  it('grade and movement modes never repaint while scrubbing', async () => {
+    const { store, colour } = await loaded();
+    for (const mode of ['grade', 'movement'] as const) {
+      store.getState().setColourMode(mode);
+      const v = colour.version;
+      for (const p of [0.3, 1, 0]) store.getState().setProgress(p);
+      expect(colour.version, mode).toBe(v);
+    }
+  });
+
+  it('movement mode: viridis on distance, min → #440154, max → #fde725', async () => {
+    const { store, colour } = await loaded();
+    store.getState().setColourMode('movement');
+    const [lo, hi] = distanceRange(movement.distance);
+    expect(rgb(colour, movement.distance.indexOf(lo))).toEqual(lin('#440154'));
+    expect(rgb(colour, movement.distance.indexOf(hi))).toEqual(lin('#fde725'));
+  });
+
+  it('modes needing data fall back to grade until it lands; a new movement in outcome mode paints grade, then outcome once', async () => {
+    const store = createAppStore({ colourMode: 'outcome' });
+    const ctx = mockCtx(store);
+    const system = createBlocksSystem(ctx, {});
+    await system.init?.();
+    store.getState().setModel(model, 'local');
+    const grade = meshes(ctx.scene)[0].geometry.getAttribute('aColor') as THREE.InstancedBufferAttribute;
+    const waste = model.oreClass.indexOf(0);
+    expect(rgb(grade, waste)).toEqual(lin(GRADE_PALETTE[0].hex));
+
+    store.getState().setMovement(movement, 'local'); // rebuild: polygons are cleared → grade
+    const colour = meshes(ctx.scene)[0].geometry.getAttribute('aColor') as THREE.InstancedBufferAttribute;
+    const v = colour.version;
+    store.getState().setDerived(derived.polygons, derived.reconciliation);
+    expect(colour.version).toBe(v + 1);
+    const classes = outcomeClasses(model, movement, derived.polygons, 'insitu_original');
+    expect(rgb(colour, 0)).toEqual(lin(OUTCOME_PALETTE[classes[0] as 0 | 1 | 2 | 3].hex));
+  });
+
+  it('a rebuild that already painted the right colours is not followed by a second write', async () => {
+    const { store, ctx } = await loaded(createAppStore({ colourMode: 'movement' }));
+    const other = await data.getMovement('b1040-017', { ...movement.params, maxThrow: movement.params.maxThrow + 2 });
+    store.getState().setMovement(other, 'local');
+    const colour = meshes(ctx.scene)[0].geometry.getAttribute('aColor') as THREE.InstancedBufferAttribute;
+    expect(colour.version).toBe(0); // fresh attribute, painted at construction, never re-uploaded
+    const [lo] = distanceRange(other.distance);
+    expect(rgb(colour, other.distance.indexOf(lo))).toEqual(lin('#440154'));
+  });
+
+  it('ore only: aOre built with the geometry; the toggle flips uOreOnly without touching buffers', async () => {
+    const { store, ctx, geo, u, colour } = await loaded();
+    const ore = geo.getAttribute('aOre') as THREE.InstancedBufferAttribute;
+    expect(ore).toBeInstanceOf(THREE.InstancedBufferAttribute);
+    for (let b = 0; b < model.count; b += 97) expect(ore.getX(b)).toBe(model.grade[b] >= model.grades.cutoff ? 1 : 0);
+    const versions = [ore.version, colour.version];
+    vi.mocked(ctx.invalidate).mockClear();
+    store.getState().setOreOnly(true);
+    expect(u.uOreOnly.value).toBe(1);
+    expect(ctx.invalidate).toHaveBeenCalled();
+    store.getState().setOreOnly(false);
+    expect(u.uOreOnly.value).toBe(0);
+    expect([ore.version, colour.version]).toEqual(versions);
+    expect(meshes(ctx.scene)[0].geometry).toBe(geo);
+  });
+
+  it('section: the slider writes the uSection uniform only (no rebuild); off = (0, 0, 0, -1)', async () => {
+    const { store, ctx, geo, u } = await loaded();
+    vi.mocked(ctx.invalidate).mockClear();
+    store.getState().setSection({ enabled: true, position: 30 });
+    expect(u.uSection.value.toArray()).toEqual([0, 1, 0, 30]);
+    expect(ctx.invalidate).toHaveBeenCalled();
+    store.getState().setSection({ axis: 'x', position: 45 });
+    expect(u.uSection.value.toArray()).toEqual([-1, 0, 0, -45]);
+    store.getState().setSection({ enabled: false });
+    expect(u.uSection.value.toArray()).toEqual([0, 0, 0, -1]);
+    expect(meshes(ctx.scene)[0].geometry).toBe(geo);
+  });
+
+  it('section + ore only survive a param change and the new movement (applied to the rebuilt geometry)', async () => {
+    const store = createAppStore({ oreOnly: true, section: { enabled: true, position: 20, axis: 'y' } });
+    const { ctx, u } = await loaded(store);
+    expect(u.uSection.value.toArray()).toEqual([0, 1, 0, 20]); // applied at init
+    expect(u.uOreOnly.value).toBe(1);
+    store.getState().setProgress(0.6);
+    store.getState().setParams({ maxThrow: store.getState().params.maxThrow + 2 });
+    const other = await data.getMovement('b1040-017', store.getState().params);
+    store.getState().setMovement(other, 'local');
+    expect(u.uSection.value.toArray()).toEqual([0, 1, 0, 20]);
+    expect(u.uOreOnly.value).toBe(1);
+    const geo = meshes(ctx.scene)[0].geometry;
+    expect(geo.getAttribute('aOre')).toBeInstanceOf(THREE.InstancedBufferAttribute);
+    expect(meshes(ctx.scene)).toHaveLength(1);
   });
 });
 

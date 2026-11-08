@@ -19,6 +19,13 @@ export interface BlocksUniforms {
   uBlockSize: THREE.IUniform<THREE.Vector3>;
   /** swell^(1/3) = MovementResult.looseScale; 1 before a movement exists. */
   uScaleEnd: THREE.IUniform<number>;
+  /**
+   * P3 section plane (nx, ny, nz, d): a block is hidden when dot(n, animated centroid) < d.
+   * (0, 0, 0, -1) = off. Written on section changes only (state/views.ts sectionPlane).
+   */
+  uSection: THREE.IUniform<THREE.Vector4>;
+  /** P3: 1 hides blocks whose aOre is 0 (waste), 0 shows all. */
+  uOreOnly: THREE.IUniform<number>;
   uLightDir: THREE.IUniform<THREE.Vector3>;
   /** Linear RGB. */
   uSkyColor: THREE.IUniform<THREE.Color>;
@@ -34,6 +41,8 @@ export function createBlocksUniforms(): BlocksUniforms {
     uArc: { value: THROW_ARC },
     uBlockSize: { value: new THREE.Vector3(1, 1, 1) },
     uScaleEnd: { value: 1 },
+    uSection: { value: new THREE.Vector4(0, 0, 0, -1) },
+    uOreOnly: { value: 0 },
     // From the south-east and above, so the east (free) face and the bench top read differently.
     uLightDir: { value: new THREE.Vector3(0.45, -0.6, 0.66).normalize() },
     uSkyColor: { value: new THREE.Color('#9aa3ad') },

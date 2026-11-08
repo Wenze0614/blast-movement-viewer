@@ -122,7 +122,7 @@ Coordinates are mine-grid metres: x = East, y = North, z = elevation. Bench loca
 
 **Step 0: firing sequence** (`core/timing.ts`, since the timing-driven movement)
 - A hole fires at `t = row · rowDelay + steps · holeDelay`: rows = burden bands behind each strip's face; steps = spacing bands from the initiation point (none for `row`; outward from the centre line for `v`; along the row from a front corner for `echelon-left` / `echelon-right`, seen from behind the blast).
-- Burden-relief direction `r̂ = normalise(rowDelay/B, −holeDelay/S · ∂steps/∂y)` (down the firing-time gradient): straight at the face, converging on a V's centre line, diagonal toward an echelon's corner. B, S come from the model's drill pattern (`BlockModel.pattern`).
+- Burden-relief direction `r̂ = normalise(rowDelay/B, −holeDelay · ∂steps/∂y)` (∂steps/∂y is in holes per metre, ±1/S) (down the firing-time gradient): straight at the face, converging on a V's centre line, diagonal toward an echelon's corner. B, S come from the model's drill pattern (`BlockModel.pattern`).
 
 **Step 1: target plan displacement**
 - s = u / U ∈ [0,1] (0 = front row), h = (z − z_toe)/H ∈ [0,1] (1 = crest)
@@ -134,7 +134,7 @@ Coordinates are mine-grid metres: x = East, y = North, z = elevation. Bench loca
 
 **Step 2: swell + re-grid (prevents overlap)**
 - k = swell^(1/3) (1.3 → 1.091). Post-blast plan grid with cell size c′ = c·k, covering the footprint plus T_max + margin.
-- Bin each target (x+T, y+L). Clamp behind the back wall (u ≥ 0) and at the confined sides.
+- Bin each target `(a, b) + T·r̂ + (0, L)` (bench-local). Never behind the back wall; rock lands only on free ground (footprint + bounded open floor) by a free path (see the irregular-footprint notes in the README).
 
 **Step 3: stacking (prevents floating)**
 - In each cell, sort by original z ascending (ties: front first).

@@ -16,7 +16,7 @@
  *
  * Burden relief: rock moves toward the ground already opened, i.e. down the firing-time gradient.
  * With the smooth field t(a, b) = rowDelay·(face − a)/B + holeDelay·steps(b), the relief direction
- * is −∇t = (rowDelay / B, −holeDelay / S · ∂steps/∂b), normalised. So a row-by-row blast throws
+ * is −∇t = (rowDelay / B, −holeDelay · ∂steps/∂b), normalised (∂steps/∂b = ±1/S holes per metre). So a row-by-row blast throws
  * straight at the face, a V converges on its centre line, and an echelon throws diagonally toward
  * its initiating corner, the familiar shapes of real muckpiles. The V's lateral pull tapers to zero
  * across the central hole band so the two halves do not cross over.

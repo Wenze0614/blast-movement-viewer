@@ -204,7 +204,7 @@ face ÷ footprint depth (0 = front row) and h = height in the bench (1 = crest):
    rows are burden bands behind each strip's face, steps are spacing bands from the initiation
    point (none for row by row; outward from the centre line for a V; along the row from a corner
    for an echelon). Rock is relieved down the firing-time gradient,
-   `r̂ = normalise(rowDelay / B, −holeDelay / S · ∂steps/∂y)`: straight at the face, converging on
+   `r̂ = normalise(rowDelay / B, −holeDelay · ∂steps/∂y)` (∂steps/∂y = ±1/S holes per metre): straight at the face, converging on
    a V's centre line, or diagonal toward an echelon's corner. The holes are coloured by the same t.
 2. **Target displacement.** Throw `T = T_max · [r_back + (1 − r_back)(1 − s)^p] · [r_toe + (1 − r_toe)·h] · (1 + 0.25·R·n₁)`
    along r̂, plus lateral `L = R·σ_lat·n₂ + fan·((y − y_c)/(W/2))·(1 − s)` (y_c, W: the footprint's

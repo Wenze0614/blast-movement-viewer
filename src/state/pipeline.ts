@@ -31,11 +31,12 @@
  *      data source and used if it matches the model;
  *   4. last resort: the holes are re-sampled from the model with the detail's own pattern, so the
  *      layer never shows grades from a model that isn't on screen.
- * "Matches" is checked, not assumed: `generateHoles(model, detail.pattern, detail.freeFace)` must
- * reproduce `detail.holes`. Params are never touched (no setBlast). `isCurrent()` is checked after
+ * "Matches" is checked, not assumed: the detail's drill pattern must equal `model.pattern` (the
+ * firing sequence the movement uses) and `generateHoles(model, model.pattern, detail.freeFace)`
+ * must reproduce `detail.holes`; a re-sampled detail takes the model's pattern. Params are never touched (no setBlast). `isCurrent()` is checked after
  * the fetch, and the detail and the model are written together only while the request is current.
  */
-import type { BlastDetail, BlastHole } from '@/core/api-types';
+import type { BlastDetail, BlastHole, BlastPattern } from '@/core/api-types';
 import { getBlastConfig } from '@/core/blasts';
 import { blockModelConfigHash } from '@/core/blockModel';
 import { buildBlastDetail, generateHoles } from '@/core/holes';
@@ -61,11 +62,27 @@ function sameHoles(a: readonly BlastHole[], b: readonly BlastHole[]): boolean {
   });
 }
 
-/** Was `detail` built for `model`? Its holes must be exactly what the model gives for its pattern. */
+/** Same drill pattern, field by field? */
+function samePattern(a: BlastPattern, b: BlastPattern): boolean {
+  return (
+    a.burden === b.burden &&
+    a.spacing === b.spacing &&
+    a.holeDiameterMm === b.holeDiameterMm &&
+    a.subdrill === b.subdrill &&
+    a.rows === b.rows &&
+    a.holesPerRow === b.holesPerRow
+  );
+}
+
+/**
+ * Was `detail` built for `model`? Its drill pattern must be the model's (the movement's firing
+ * sequence uses `model.pattern`) and its holes exactly what the model gives for that pattern.
+ */
 export function detailMatchesModel(detail: BlastDetail, model: BlockModel): boolean {
   return (
     detail.blockCount === model.count &&
-    sameHoles(detail.holes, generateHoles(model, detail.pattern, detail.freeFace))
+    samePattern(detail.pattern, model.pattern) &&
+    sameHoles(detail.holes, generateHoles(model, model.pattern, detail.freeFace))
   );
 }
 
@@ -122,7 +139,8 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
       blockCount: model.count,
       grid: { ...model.grid, origin: [...model.grid.origin], blockSize: [...model.grid.blockSize] },
       grades: { ...model.grades },
-      holes: generateHoles(model, base.pattern, base.freeFace),
+      pattern: { ...model.pattern },
+      holes: generateHoles(model, model.pattern, base.freeFace),
     };
   }
 

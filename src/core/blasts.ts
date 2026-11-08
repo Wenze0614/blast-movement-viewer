@@ -7,6 +7,7 @@
  * | b1030-022 | 40×24×4 @ 2.5 m           | L-shape (narrow back)      | two pods with a waste parting    |
  * | b1040-031 | 80×48×8 @ 1.25 m          | notched, chamfered corner  | lens + high-grade shoot (dense)  |
  *
+ * Default firing: V from the front centre (017, 031), echelon from the right front corner (022).
  * Each grid is a 100 × 60 × 10 m bounding box; the outline (plan polygon, world x/y) picks the
  * block columns (blockCount in the summary). The free face is on the east side (throw = +x).
  * Bench "1040" has its crest at RL 1040 and its toe (benchRL, grid origin z) at RL 1030.
@@ -15,7 +16,7 @@ import type { BlastPattern } from './api-types';
 import { blockModelConfigHash, type BlockModelConfig } from './blockModel';
 import { fnv1a64 } from './hash';
 import { MOVEMENT_MODEL_VERSION } from './movement';
-import { DEFAULT_BLAST_PARAMETERS, DEFAULT_GRADE_SETTINGS } from './defaults';
+import { DEFAULT_BLAST_PARAMETERS, DEFAULT_GRADE_SETTINGS, DEFAULT_PATTERN } from './defaults';
 import type { OrebodySpec } from './orebody';
 import type { BlastParameters } from './types';
 
@@ -24,20 +25,13 @@ export interface BlastConfig extends BlockModelConfig {
   name: string;
   description: string;
   freeFace: BlastParameters['freeFace'];
-  /** Display only: drives the synthetic blasthole layer, NOT the movement heuristic. */
+  /** Lays out the hole layer; its burden and spacing shape the firing sequence (timing.ts). */
   pattern: BlastPattern;
   defaultParams: BlastParameters;
 }
 
-/** Display-only pattern on a 100 × 60 m bench: 25 rows × 13 holes = 325 holes. */
-const PATTERN_100x60: BlastPattern = {
-  burden: 4.0,
-  spacing: 4.6,
-  holeDiameterMm: 115,
-  subdrill: 1.0,
-  rows: 25,
-  holesPerRow: 13,
-};
+/** Pattern on a 100 × 60 m bench: 25 rows × 13 holes = 325 positions (inside the outline drilled). */
+const PATTERN_100x60: BlastPattern = { ...DEFAULT_PATTERN };
 
 const BASE_OREBODY: Omit<OrebodySpec, 'features'> = {
   background: { median: 0.12, logSigma: 0.5 },
@@ -94,7 +88,7 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
       ],
     },
     pattern: PATTERN_100x60,
-    defaultParams: { ...DEFAULT_BLAST_PARAMETERS },
+    defaultParams: { ...DEFAULT_BLAST_PARAMETERS, initiation: 'echelon-right' },
   },
   {
     id: 'b1040-031',

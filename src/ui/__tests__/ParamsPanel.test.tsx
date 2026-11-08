@@ -8,7 +8,7 @@ import { LocalDataSource } from '@/data';
 import { PARAM_RANGES } from '@/core/params';
 import { appStore, initialAppState } from '@/state/store';
 import BlastPicker from '../BlastPicker';
-import ParamsPanel, { MAIN_SLIDERS, MORE_SLIDERS, PARAM_DEBOUNCE_MS } from '../ParamsPanel';
+import ParamsPanel, { MAIN_SLIDERS, MORE_SLIDERS, PARAM_DEBOUNCE_MS, TIMING_SLIDERS } from '../ParamsPanel';
 import { SourceBadgeView } from '../SourceBadge';
 
 const data = new LocalDataSource();
@@ -71,7 +71,7 @@ describe('ParamsPanel (P5)', () => {
 
   it('slider ranges are the ADR-12 ranges the API validates', () => {
     render(<ParamsPanel />);
-    for (const spec of [...MAIN_SLIDERS, ...MORE_SLIDERS]) {
+    for (const spec of [...TIMING_SLIDERS, ...MAIN_SLIDERS, ...MORE_SLIDERS]) {
       const el = document.getElementById(`param-${spec.key}`) as HTMLInputElement;
       expect(Number(el.min), spec.key).toBe(PARAM_RANGES[spec.key].min);
       expect(Number(el.max), spec.key).toBe(PARAM_RANGES[spec.key].max);
@@ -96,6 +96,19 @@ describe('ParamsPanel (P5)', () => {
     expect(writes).toHaveBeenCalledOnce();
     expect(appStore.getState().params).toMatchObject({ maxThrow: 14.5, swellFactor: 1.4 });
     unsub();
+  });
+
+  it('firing sequence: the initiation select and the delay sliders write the timing params', () => {
+    vi.useFakeTimers();
+    render(<ParamsPanel />);
+    const select = screen.getByRole('combobox', { name: /Initiation/ }) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['row', 'v', 'echelon-left', 'echelon-right']);
+    expect(select.value).toBe(appStore.getState().params.initiation);
+    fireEvent.change(select, { target: { value: 'echelon-left' } });
+    fireEvent.change(screen.getByLabelText('Hole delay'), { target: { value: '60' } });
+    fireEvent.change(screen.getByLabelText('Row delay'), { target: { value: '30' } });
+    act(() => vi.advanceTimersByTime(PARAM_DEBOUNCE_MS));
+    expect(appStore.getState().params).toMatchObject({ initiation: 'echelon-left', holeDelayMs: 60, rowDelayMs: 30 });
   });
 
   it('seed input writes an integer ≥ 0', () => {

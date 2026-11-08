@@ -11,7 +11,8 @@
  *   the columns through the ore read as context.
  * - Lighting: the same hand-written chunk as the blocks, so no scene lights are added and the
  *   blocks are unaffected.
- * - Illustrative only: the movement heuristic never reads the pattern (labelled in the UI).
+ * - Illustrative layout: the hole positions are not a movement input, but the pattern's burden and
+ *   spacing shape the firing sequence the movement follows; the holes can show it (firing time).
  * - Depth: at full opacity (before the blast) the material is OPAQUE (depth write on, opaque
  *   pass), so the stick-ups occlude and sort like solid geometry. Only while fading
  *   (0 < opacity < 1) is it transparent with depthWrite: false, so a fading hole never punches
@@ -19,12 +20,14 @@
  */
 import * as THREE from 'three';
 import type { BlastDetail } from '@/core/api-types';
+import { holeFiringTimes } from '@/core/timing';
+import type { AppState } from '@/state/store';
 import { sectionPlane } from '@/state/views';
 import holesFrag from '../shaders/holes.frag.glsl';
 import { createHolesUniforms } from '../shaders/holes.uniforms';
 import holesVert from '../shaders/holes.vert.glsl';
 import type { SystemFactory } from '../types';
-import { EMPTY_HOLE_PACK, holesOpacity, packHoles, type HolePack } from './holesAttributes';
+import { EMPTY_HOLE_PACK, holesOpacity, packHoles, packHoleTimingColours, type HolePack } from './holesAttributes';
 
 /** Radial segments of the unit cylinder: round enough at r = 0.3 m, ~50 triangles per hole. */
 const RADIAL_SEGMENTS = 12;
@@ -92,11 +95,35 @@ export const createHolesSystem: SystemFactory = (ctx) => {
     }
   };
 
+  /** Grade colours of the current pack (packHoles), kept to restore the grade mode in place. */
+  let gradeColours = EMPTY_HOLE_PACK.color;
+
+  /**
+   * Firing-time mode: colour each hole by when it fires under the current timing params, measured
+   * on the current model (the field the movement uses). Grade mode, or no model yet: grade colours.
+   */
+  const recolour = () => {
+    const s = store.getState();
+    const attr = geometry.getAttribute('aColor') as THREE.InstancedBufferAttribute | undefined;
+    if (!attr || !s.blast || geometry.instanceCount === 0) return;
+    const out = attr.array as Float32Array;
+    // The pipeline stores a blast detail only together with the model it was built for.
+    if (s.holeColour === 'timing' && s.model) {
+      packHoleTimingColours(holeFiringTimes(s.model, s.blast.holes, s.params), out);
+    } else {
+      out.set(gradeColours);
+    }
+    attr.needsUpdate = true;
+    ctx.invalidate();
+  };
+
   const rebuild = (blast: BlastDetail | null) => {
     const pack = blast ? packHoles(blast.holes, blast.grades) : EMPTY_HOLE_PACK;
+    gradeColours = pack.color.slice();
     geometry.dispose();
     geometry = buildHolesGeometry(base, pack);
     mesh.geometry = geometry;
+    recolour();
     applyVisibility();
     ctx.invalidate();
   };
@@ -107,6 +134,14 @@ export const createHolesSystem: SystemFactory = (ctx) => {
   };
 
   bag.track(store.subscribe((s) => s.blast, rebuild));
+  /** Everything the firing-time colours depend on, besides the holes themselves. */
+  const timingKey = (s: AppState) =>
+    [s.holeColour, s.model, s.params.freeFace, s.params.initiation, s.params.rowDelayMs, s.params.holeDelayMs] as const;
+  bag.track(
+    store.subscribe(timingKey, recolour, {
+      equalityFn: (a, b) => a.every((v, i) => v === b[i]),
+    }),
+  );
   bag.track(
     store.subscribe(
       (s) => s.layers.holes,

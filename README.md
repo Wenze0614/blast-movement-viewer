@@ -29,9 +29,13 @@ Media to capture in a browser (not yet recorded); add the image links once the f
 - **Pit context.** A synthetic, seeded terrain around the blast: the floor it sits on, the open
   floor in front of its free face (stepping down to the bench below), unblasted bench rock around
   its outline and two upper benches behind, with an irregular surveyed edge. Display only.
-- **Blastholes.** The burden × spacing pattern as instanced cylinders coloured by the hole's
-  sampled grade. Visible before the blast and fading out as it fires. Labelled *illustrative
-  pattern, not used by the movement heuristic*.
+- **Firing sequence.** Each blast has an initiation pattern (row by row, a V from the front
+  centre, or an echelon from a front corner) with row and hole delays. Rock moves toward the
+  holes that fired before it (burden relief), so a V piles the muck on its centre line and an
+  echelon throws it diagonally toward its starting corner; blocks start moving in firing order.
+- **Blastholes.** The burden × spacing pattern as instanced cylinders, coloured by **firing time**
+  (default) or by sampled grade. Visible before the blast and fading out as it fires. Labelled
+  *illustrative pattern; its firing sequence sets the throw direction*.
 - **Dig lines.** The original line (contoured on the in-situ model) and the adjusted line
   (contoured on the post-blast model), toggleable.
 - **Colour modes.** Grade class, outcome (ore → mill, ore lost, dilution, waste → waste) and
@@ -51,8 +55,8 @@ Media to capture in a browser (not yet recorded); add the image links once the f
 - **Reconciliation table.** Mill tonnes, mill grade, ore loss %, dilution %, ounces to the mill and
   ore metal recovery for three scenarios (in-situ / original, post-blast / original, post-blast /
   adjusted), with deltas and formula tooltips.
-- **Parameters.** Max throw, swell, randomness, back-row and toe ratios, and more. Each change
-  requests a new movement from the API (debounced).
+- **Parameters.** Initiation, row and hole delays, max throw, swell, randomness, back-row and toe
+  ratios, and more. Each change requests a new movement from the API (debounced).
 - **Source badge.** `● API · 42 ms`, `● Local fallback` (the API failed; hover for why) or
   `● Local · 12 ms`.
 - **About.** A modal with the framing above, what this is not, and links.
@@ -196,18 +200,25 @@ The outline is irregular, so the face is too: each lateral strip (one block colu
 face at the front of its own blocks (`src/core/footprint.ts`). With s = distance from the strip's
 face ÷ footprint depth (0 = front row) and h = height in the bench (1 = crest):
 
-1. **Target displacement.** Throw `T = T_max · [r_back + (1 − r_back)(1 − s)^p] · [r_toe + (1 − r_toe)·h] · (1 + 0.25·R·n₁)`;
-   lateral `L = R·σ_lat·n₂ + fan·((y − y_c)/(W/2))·(1 − s)` (y_c, W: the footprint's lateral centre and width). n₁ and n₂ are seeded 3D simplex
-   noise, so neighbours move coherently. The defaults give ~6–10 m at the crest and ~3–4 m at the toe.
-2. **Swell and re-grid.** k = swell^(1/3). Targets are binned onto a post-blast plan grid with cell
+1. **Firing sequence** (`src/core/timing.ts`). A hole fires at `t = row · rowDelay + steps · holeDelay`:
+   rows are burden bands behind each strip's face, steps are spacing bands from the initiation
+   point (none for row by row; outward from the centre line for a V; along the row from a corner
+   for an echelon). Rock is relieved down the firing-time gradient,
+   `r̂ = normalise(rowDelay / B, −holeDelay · ∂steps/∂y)` (∂steps/∂y = ±1/S holes per metre): straight at the face, converging on
+   a V's centre line, or diagonal toward an echelon's corner. The holes are coloured by the same t.
+2. **Target displacement.** Throw `T = T_max · [r_back + (1 − r_back)(1 − s)^p] · [r_toe + (1 − r_toe)·h] · (1 + 0.25·R·n₁)`
+   along r̂, plus lateral `L = R·σ_lat·n₂ + fan·((y − y_c)/(W/2))·(1 − s)` (y_c, W: the footprint's
+   lateral centre and width). n₁ and n₂ are seeded 3D simplex noise, so neighbours move coherently.
+   The defaults give ~6–10 m at the crest and ~3–4 m at the toe.
+3. **Swell and re-grid.** k = swell^(1/3). Targets are binned onto a post-blast plan grid with cell
    size c·k. Rock lands only on free ground: the blast footprint or the open floor in front of the
    face (a bay about 45 m deep and 30 m wider than the blast each side). A cell is taken only if
    the whole swollen block fits on free ground **and** the block's animated box stays over free
    ground (within the terrain's 1.25 m floor margin) all the way there, so no block meets the pit
    terrain, settled or in flight. A blocked target moves to the nearest reachable cell.
-3. **Stacking.** Each cell stacks its blocks by original elevation, so nothing floats or overlaps.
+4. **Stacking.** Each cell stacks its blocks by original elevation, so nothing floats or overlaps.
    Loose volume = swell × bank volume exactly (unit-tested).
-4. **Angle of repose.** The tallest offending stack moves its top block to the lowest valid
+5. **Angle of repose.** The tallest offending stack moves its top block to the lowest valid
    neighbour, repeatedly. A stack offends when, along a grid axis, the drop to a cell up to
    6 cells away (d = 1…6) exceeds the allowed drop `max(1, round(d · tan(φ) · c′ / (H_b·k)))`
    blocks, i.e. the **rounded average slope** over that baseline is steeper than φ. Relaxation
@@ -216,9 +227,10 @@ face ÷ footprint depth (0 = front row) and h = height in the bench (1 = crest):
    over one cell is already a 45° slope, so for φ < 45° no pair of unequal neighbours could ever
    satisfy it and the piles would oscillate. Every allowed drop is ≥ 1 block, so each move lowers a
    block and the relaxation terminates (`allowedDrop` in `src/core/movement.ts`).
-5. **Animation delay.** Front rows start first (visual only).
+6. **Animation delay.** Blocks start in firing order: `0.45 · (t − t_min)/(t_max − t_min)` plus a little noise (visual only).
 
-**Known simplifications:** no timing, explosive or rock physics; vertical order is preserved within
+**Known simplifications:** the firing sequence sets direction and order only (no timing,
+explosive or rock physics: delays do not change throw distance or fragmentation); vertical order is preserved within
 a column; positions snap to the post-blast lattice (no sub-block mixing); one free face; a single
 dig horizon; blocks fly in straight lines, so a pile against a corner of unblasted rock can stand a
 little steeper than the repose angle (no block could reach the lower cell without crossing the rock).

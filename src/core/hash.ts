@@ -12,6 +12,9 @@ import type { BlastParameters } from './types';
 /** Fixed key order for the canonical form (= the order in types.ts). */
 export const PARAM_KEYS = [
   'freeFace',
+  'initiation',
+  'rowDelayMs',
+  'holeDelayMs',
   'maxThrow',
   'backRowRatio',
   'throwExponent',
@@ -39,6 +42,9 @@ export function round2(x: number): number {
 export function canonicalParams(params: BlastParameters): BlastParameters {
   return {
     freeFace: params.freeFace,
+    initiation: params.initiation,
+    rowDelayMs: round2(params.rowDelayMs),
+    holeDelayMs: round2(params.holeDelayMs),
     maxThrow: round2(params.maxThrow),
     backRowRatio: round2(params.backRowRatio),
     throwExponent: round2(params.throwExponent),
@@ -53,7 +59,7 @@ export function canonicalParams(params: BlastParameters): BlastParameters {
   };
 }
 
-/** `freeFace=east&maxThrow=10&…&seed=42` — also a valid canonical query string. */
+/** `freeFace=east&initiation=v&rowDelayMs=42&…&seed=42` — also a valid canonical query string. */
 export function canonicalParamsString(params: BlastParameters): string {
   const c = canonicalParams(params);
   return PARAM_KEYS.map((k) => `${k}=${String(c[k])}`).join('&');

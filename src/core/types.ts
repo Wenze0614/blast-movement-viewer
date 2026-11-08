@@ -47,6 +47,26 @@ export interface GradeSettings {
 }
 
 /**
+ * Drill pattern of a blast. Burden and spacing set the firing sequence's geometry (timing.ts: rows
+ * one burden apart, holes one spacing apart), which drives the movement direction; the rest only
+ * lays out the illustrative hole layer.
+ */
+export interface BlastPattern {
+  /** m, 4.0: row-to-row distance. */
+  burden: number;
+  /** m, 4.6: hole-to-hole distance along a row. */
+  spacing: number;
+  /** 115 */
+  holeDiameterMm: number;
+  /** m, 1.0 */
+  subdrill: number;
+  /** 25 */
+  rows: number;
+  /** 13 */
+  holesPerRow: number;
+}
+
+/**
  * Storage: struct-of-arrays over the PRESENT blocks only (sparse). Block id = array index
  * 0..count-1; `cell[id]` is the block's grid cell i + nx * (j + ny * k), strictly increasing, so
  * ids run flitch by flitch (k), then row (j), then column (i), like the dense grid order.
@@ -58,6 +78,8 @@ export interface BlockModel {
   count: number;
   /** count; grid cell index i + nx * (j + ny * k) of each block, strictly increasing. */
   cell: Uint32Array;
+  /** The blast's drill pattern (its burden and spacing shape the firing sequence). */
+  pattern: BlastPattern;
   /** 3 * count, m (block centres). */
   centroid: Float32Array;
   /** g/t Au, e.g. 0.12 .. 6.0 */
@@ -73,7 +95,7 @@ export interface BlockModel {
   seed: number;
   /**
    * Canonical hash of EVERYTHING that determined this model (grid, grades, ore body definition,
-   * seed, generator version), as 16 hex chars. Part of the movement cache key (ADR-12), so a
+   * outline, drill pattern, seed, generator version), as 16 hex chars. Part of the movement cache key (ADR-12), so a
    * changed ore body never reuses a cached movement result. Travels with the model (codec header).
    */
   configHash: string;
@@ -97,9 +119,22 @@ export interface Block {
   oreClass: OreClass;
 }
 
+/**
+ * Initiation pattern (timing.ts), seen from behind the blast looking at the free face:
+ * 'row' = row by row (straight throw), 'v' = from the front centre outward (rock converges on the
+ * centre line), 'echelon-left' / 'echelon-right' = from a front corner (diagonal throw toward it).
+ */
+export type Initiation = 'row' | 'v' | 'echelon-left' | 'echelon-right';
+
 export interface BlastParameters {
-  /** MVP fixed: 'east'. */
+  /** Side the blast throws toward. 'east' for the demo blasts. */
   freeFace: 'east' | 'west' | 'north' | 'south';
+  /** Firing sequence. 'v' */
+  initiation: Initiation;
+  /** ms between rows (one burden). 42 */
+  rowDelayMs: number;
+  /** ms between neighbouring holes along a row (one spacing), away from the initiation point. 25 */
+  holeDelayMs: number;
   /** m, horizontal throw at front row, crest. 10 */
   maxThrow: number;
   /** 0..1, throw at back row as fraction of max. 0.2 */
@@ -123,7 +158,8 @@ export interface BlastParameters {
   /** integer >= 0. 42 */
   seed: number;
 }
-// Burden/spacing/powder factor are NOT inputs to the heuristic (see BlastPattern: display only).
+// Burden and spacing shape the firing sequence (timing.ts) through BlockModel.pattern; powder
+// factor, explosive and rock properties are NOT inputs to the heuristic.
 
 export interface Heightfield {
   origin: Vec2;

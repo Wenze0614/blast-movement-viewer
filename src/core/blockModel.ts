@@ -7,12 +7,14 @@
  * Sparse: a blast outline (plan polygon) selects the columns that hold blocks; every flitch of a
  * selected column is present. Block id = index into the arrays; `cell[id]` is its grid cell.
  */
+import { DEFAULT_PATTERN } from './defaults';
 import { outlineColumnMask } from './footprint';
 import { canonicalJson, fnv1a64 } from './hash';
 import { createOrebodySampler, type OrebodySpec } from './orebody';
 import {
   OreClass,
   RockType,
+  type BlastPattern,
   type Block,
   type BlockModel,
   type GradeSettings,
@@ -33,6 +35,8 @@ export interface BlockModelConfig {
    * hold blocks. Omitted → every column of the grid (a rectangular blast).
    */
   outline?: readonly Vec2[];
+  /** Drill pattern; its burden and spacing shape the firing sequence. Omitted → DEFAULT_PATTERN. */
+  pattern?: BlastPattern;
 }
 
 /**
@@ -44,13 +48,15 @@ export const MODEL_GENERATOR_VERSION = 2;
 
 /**
  * Canonical hash of everything that determines a block model: generator version, grid, grade
- * settings, the complete ore body definition, the outline and the model seed. Display-only fields
- * of a BlastConfig (id, name, pattern, default params) are deliberately excluded.
+ * settings, the complete ore body definition, the outline, the drill pattern (it shapes the firing
+ * sequence, so it changes the movement) and the model seed. Display-only fields of a BlastConfig
+ * (id, name, description, default params) are deliberately excluded.
  */
 export function blockModelConfigHash(cfg: BlockModelConfig): string {
   const { grid, grades, orebody, seed } = cfg;
   const outline = cfg.outline ?? null;
-  return fnv1a64(`bmv-model/v${MODEL_GENERATOR_VERSION}|${canonicalJson({ grid, grades, orebody, seed, outline })}`);
+  const pattern = cfg.pattern ?? DEFAULT_PATTERN;
+  return fnv1a64(`bmv-model/v${MODEL_GENERATOR_VERSION}|${canonicalJson({ grid, grades, orebody, seed, outline, pattern })}`);
 }
 
 /** Cells in the bounding grid (nx·ny·nz); a sparse model holds `count` ≤ this many blocks. */
@@ -158,6 +164,7 @@ export function generateBlockModel(cfg: BlockModelConfig): BlockModel {
     grades: { ...grades },
     count,
     cell,
+    pattern: { ...(cfg.pattern ?? DEFAULT_PATTERN) },
     centroid,
     grade,
     density,

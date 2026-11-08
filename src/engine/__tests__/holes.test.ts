@@ -14,7 +14,8 @@ import { createAppStore, type AppStore } from '@/state/store';
 import { createDisposeBag } from '../disposeBag';
 import { hexToLinearRgb } from '../systems/blocksAttributes';
 import { createHolesSystem } from '../systems/holes';
-import { HOLES_FADE_END, HOLE_STICKUP, holesOpacity, packHoles } from '../systems/holesAttributes';
+import { holeFiringTimes } from '@/core/timing';
+import { HOLES_FADE_END, HOLE_STICKUP, holesOpacity, packHoles, packHoleTimingColours } from '../systems/holesAttributes';
 import { registerSystems } from '../systems';
 import type { EngineContext } from '../types';
 
@@ -314,6 +315,41 @@ describe('holes system (P9)', () => {
     const ctx = mockCtx();
     const names = registerSystems(ctx).map((s) => s.name);
     expect(names.indexOf('holes')).toBe(names.indexOf('blocks') + 1);
+    ctx.bag.disposeAll();
+  });
+});
+
+describe('holes coloured by firing time', () => {
+  it('packHoleTimingColours: first hole → first plasma stop, last → last; in place', () => {
+    const out = new Float32Array(9);
+    const res = packHoleTimingColours(new Float32Array([0, 50, 100]), out);
+    expect(res).toBe(out);
+    expect(Array.from(out.subarray(0, 3))).toEqual(hexToLinearRgb('#0d0887').map((v) => Math.fround(v)));
+    expect(Array.from(out.subarray(6, 9))).toEqual(hexToLinearRgb('#f0f921').map((v) => Math.fround(v)));
+    expect(() => packHoleTimingColours(new Float32Array(2), out)).toThrow(/wrong length/);
+  });
+
+  it('timing mode (default) colours by the firing field; grade mode restores grade colours; timing changes recolour in place', async () => {
+    const ctx = mockCtx();
+    const system = createHolesSystem(ctx, {});
+    await system.init?.();
+    const s = ctx.store.getState();
+    s.setBlast(detail);
+    s.setModel(model, 'local');
+    const geo = () => holesMeshes(ctx.scene)[0].geometry as THREE.InstancedBufferGeometry;
+    const colours = () => Array.from(geo().getAttribute('aColor').array as Float32Array);
+    const timing = (p = ctx.store.getState().params) => Array.from(packHoleTimingColours(holeFiringTimes(model, detail.holes, p)));
+    expect(ctx.store.getState().holeColour).toBe('timing');
+    expect(colours()).toEqual(timing());
+    const first = geo();
+    ctx.store.getState().setHoleColour('grade');
+    expect(colours()).toEqual(Array.from(packHoles(detail.holes, grades).color));
+    ctx.store.getState().setHoleColour('timing');
+    ctx.store.getState().setParams({ initiation: 'echelon-left' });
+    expect(colours()).toEqual(timing());
+    expect(colours()).not.toEqual(timing({ ...ctx.store.getState().params, initiation: 'v' }));
+    expect(geo()).toBe(first); // recoloured in place, no rebuild
+    system.dispose();
     ctx.bag.disposeAll();
   });
 });

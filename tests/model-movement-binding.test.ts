@@ -317,6 +317,28 @@ describe('blast detail ↔ model source (P9 hole layer)', () => {
     pipeline.dispose();
   });
 
+  it('pattern-only mismatch: an API detail with another drill pattern is replaced by the model\'s own (Codex review)', async () => {
+    const wide = { ...cfgA.pattern, burden: 8, spacing: 6 };
+    const api = detailOnlyApi({ ...cfgA, pattern: wide });
+    expect(api.detailB.holes.length).toBeLessThan(200);
+    // The check itself: holes that match their own pattern are not enough; the pattern must be the model's.
+    expect(detailMatchesModel(api.detailB, modelA)).toBe(false);
+
+    const store = createAppStore();
+    const watch = watchPairs(store);
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
+    await pipeline.settled;
+    const s = store.getState();
+    expect(s.status).toBe('ready');
+    expect(s.model!.configHash).toBe(modelA.configHash);
+    expect(s.blast!.pattern).toEqual(modelA.pattern);
+    expect(s.blast!.holes.length).toBe(258);
+    expect(detailMatchesModel(s.blast!, s.model!)).toBe(true);
+    expect(watch.violations).toEqual([]);
+    watch.unsub();
+    pipeline.dispose();
+  });
+
   it('a detail that already matches the local model is not replaced (no needless hole-layer rebuild)', async () => {
     const store = createAppStore();
     const blasts: unknown[] = [];

@@ -11,6 +11,7 @@
 import { subscribeWithSelector } from 'zustand/middleware';
 import { createStore, type Mutate, type StoreApi } from 'zustand/vanilla';
 import { DEFAULT_BLAST_PARAMETERS } from '@/core/defaults';
+import { completeParams } from '@/core/params';
 import type {
   BlastParameters,
   BlockModel,
@@ -25,6 +26,8 @@ import type { DataSourceKind } from '@/data';
 export type ColourMode = 'grade' | 'outcome' | 'movement';
 export type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 export type LayerKey = 'originalLine' | 'adjustedLine' | 'holes';
+/** What the blasthole layer is coloured by: sampled grade or firing time (core/timing.ts). */
+export type HoleColour = 'grade' | 'timing';
 /** Which dig line drives outcome colouring once the blast has started (P1). */
 export type OutcomeLine = 'original' | 'adjusted';
 
@@ -91,6 +94,7 @@ export interface AppState {
   /** Outcome mode, after the blast: classify against this line. Before it: always the original. */
   outcomeLine: OutcomeLine;
   layers: Record<LayerKey, boolean>;
+  holeColour: HoleColour;
   oreOnly: boolean;
   section: SectionState;
   /** Selected block id, or null. */
@@ -133,6 +137,7 @@ export interface AppActions {
   setOutcomeLine(line: OutcomeLine): void;
   setLayer(layer: LayerKey, visible: boolean): void;
   toggleLayer(layer: LayerKey): void;
+  setHoleColour(colour: HoleColour): void;
   setOreOnly(oreOnly: boolean): void;
   setSection(patch: Partial<SectionState>): void;
   select(blockId: number | null): void;
@@ -172,6 +177,7 @@ export function initialAppState(): AppState {
     colourMode: 'grade',
     outcomeLine: 'original',
     layers: { originalLine: true, adjustedLine: true, holes: true },
+    holeColour: 'timing',
     oreOnly: false,
     section: { enabled: false, position: 0, axis: 'y' },
     selection: null,
@@ -249,7 +255,11 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
           playing: false,
         });
       },
-      setBlast: (blast) => set({ blast, ...paramsUpdate(get(), blast.defaultParams) }),
+      setBlast: (detail) => {
+        // Defensive: a detail from any source with missing params gets the defaults for them.
+        const blast = { ...detail, defaultParams: completeParams(detail.defaultParams) };
+        set({ blast, ...paramsUpdate(get(), blast.defaultParams) });
+      },
       setParams: (patch) => set(paramsUpdate(get(), { ...get().params, ...patch })),
       resetParams: () => set(paramsUpdate(get(), get().blast?.defaultParams ?? DEFAULT_BLAST_PARAMETERS)),
 
@@ -278,6 +288,7 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       setOutcomeLine: (outcomeLine) => set({ outcomeLine }),
       setLayer: (layer, visible) => set({ layers: { ...get().layers, [layer]: visible } }),
       toggleLayer: (layer) => set({ layers: { ...get().layers, [layer]: !get().layers[layer] } }),
+      setHoleColour: (holeColour) => set({ holeColour }),
       setOreOnly: (oreOnly) => set({ oreOnly }),
       setSection: (patch) => set({ section: { ...get().section, ...patch } }),
       select: (selection) => set({ selection }),

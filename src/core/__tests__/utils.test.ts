@@ -71,7 +71,7 @@ describe('hash (ADR-12)', () => {
 
   it('canonical string is a query string in the fixed key order', () => {
     expect(canonicalParamsString(DEFAULT_BLAST_PARAMETERS)).toBe(
-      'freeFace=east&maxThrow=10&backRowRatio=0.2&throwExponent=1.5&toeRatio=0.4&lateralSigma=1&lateralFan=1&swellFactor=1.3&reposeAngleDeg=37&randomness=0.5&noiseLength=8&seed=42',
+      'freeFace=east&initiation=v&rowDelayMs=42&holeDelayMs=25&maxThrow=10&backRowRatio=0.2&throwExponent=1.5&toeRatio=0.4&lateralSigma=1&lateralFan=1&swellFactor=1.3&reposeAngleDeg=37&randomness=0.5&noiseLength=8&seed=42',
     );
   });
 

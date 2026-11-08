@@ -7,8 +7,8 @@ import { smoothstep01 } from '@/core/easing';
 import { classifyGrade } from '@/core/blockModel';
 import type { BlastHole } from '@/core/api-types';
 import type { GradeSettings } from '@/core/types';
-import { GRADE_PALETTE } from '@/state/palette';
-import { hexToLinearRgb } from './blocksAttributes';
+import { GRADE_PALETTE, plasmaSrgb } from '@/state/palette';
+import { hexToLinearRgb, srgbToLinear } from './blocksAttributes';
 
 /**
  * m. Drawn radius. A real 115 mm hole (r = 0.0575 m) is invisible at bench scale, so the layer
@@ -67,6 +67,23 @@ export function packHoles(holes: readonly BlastHole[], grades: GradeSettings, st
     color.set(c, 3 * i);
   });
   return { count: n, center, axis, color };
+}
+
+/**
+ * aColor by firing time (ms, core/timing.ts holeFiringTimes): 0 → first plasma stop, the last hole
+ * → the last stop. Writes into `out` when given (a mode or timing change rewrites it in place).
+ */
+export function packHoleTimingColours(times: Float32Array, out: Float32Array = new Float32Array(times.length * 3)): Float32Array {
+  if (out.length !== times.length * 3) throw new Error('packHoleTimingColours: out has the wrong length');
+  let max = 0;
+  for (const t of times) max = Math.max(max, t);
+  for (let i = 0; i < times.length; i++) {
+    const c = plasmaSrgb(max > 0 ? times[i] / max : 0);
+    out[3 * i] = srgbToLinear(c[0]);
+    out[3 * i + 1] = srgbToLinear(c[1]);
+    out[3 * i + 2] = srgbToLinear(c[2]);
+  }
+  return out;
 }
 
 /** Layer opacity for a playback progress: 1 before the blast, smoothly 0 by HOLES_FADE_END. */

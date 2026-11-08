@@ -3,7 +3,7 @@
  *
  * CONTRACT FILE: changes need an explicit note in the PR description (see CLAUDE.md).
  */
-import type { BlastParameters, DigPolygon, GradeSettings, GridSpec, Vec3 } from './types';
+import type { BlastParameters, BlastPattern, DigPolygon, GradeSettings, GridSpec, Vec3 } from './types';
 
 export interface BlastSummary {
   /** 'b1040-017' */
@@ -19,21 +19,8 @@ export interface BlastSummary {
   freeFace: BlastParameters['freeFace'];
 }
 
-/** DISPLAY ONLY — not used by the movement heuristic. */
-export interface BlastPattern {
-  /** m, 4.0 */
-  burden: number;
-  /** m, 4.6 */
-  spacing: number;
-  /** 115 */
-  holeDiameterMm: number;
-  /** m, 1.0 */
-  subdrill: number;
-  /** 25 */
-  rows: number;
-  /** 13 */
-  holesPerRow: number;
-}
+/** Defined with the domain types (the block model carries it); re-exported for API users. */
+export type { BlastPattern } from './types';
 
 export interface BlastHole {
   /** 'R07-H03' */

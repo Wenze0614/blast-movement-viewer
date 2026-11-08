@@ -1,7 +1,8 @@
 /**
  * Synthetic blastholes + BlastSummary / BlastDetail builders (docs/02-plan.md §3.2, P9).
  *
- * DISPLAY ONLY: the hole pattern is not an input to the movement heuristic. Note the inversion vs
+ * The hole layout is illustrative; only the pattern's burden and spacing reach the movement, through
+ * the firing sequence (timing.ts), which colours these holes by firing time. Note the inversion vs
  * reality: on a real mine blasthole samples FEED the grade-control model; here each hole's
  * `sampledGrade` is derived FROM the synthetic model (column tonnage-weighted mean + noise).
  */

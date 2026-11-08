@@ -20,6 +20,8 @@ vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/ser
 let apiUp = true;
 /** Simulates a client bundle built against another config: its `?v=` is not the server's. */
 let staleClient = false;
+/** Simulates a blast detail cached before the timing params existed (no timing in defaultParams). */
+let oldDetail = false;
 /** Movement requests are held until released, so tests can order responses. */
 let gate: Promise<void> | null = null;
 
@@ -32,7 +34,13 @@ const routedFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): 
   const path = new URL(req.url).pathname.split('/').filter(Boolean); // ['api','blasts',id?,leaf?]
   const ctx = { params: Promise.resolve({ id: path[2] }) };
   if (path.length === 2) return getBlasts();
-  if (path.length === 3) return getBlast(req, ctx);
+  if (path.length === 3) {
+    const res = await getBlast(req, ctx);
+    if (!oldDetail || !res.ok) return res;
+    const body = await res.json();
+    for (const k of ['initiation', 'rowDelayMs', 'holeDelayMs']) delete body.defaultParams[k];
+    return Response.json(body, { status: res.status, headers: res.headers });
+  }
   if (path[3] === 'model') return getModel(req, ctx);
   if (gate) await gate;
   init?.signal?.throwIfAborted();
@@ -45,6 +53,7 @@ const model = generateBlockModel(cfg);
 beforeEach(() => {
   apiUp = true;
   staleClient = false;
+  oldDetail = false;
   gate = null;
   routedFetch.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -62,6 +71,18 @@ function setup() {
 }
 
 describe('ApiDataSource through the route handlers', () => {
+  it('a blast detail cached before the timing params existed still loads: missing params take the defaults (Codex review)', async () => {
+    oldDetail = true;
+    const { store, pipeline } = setup();
+    await pipeline.settled;
+    const s = store.getState();
+    expect(s.status, s.error ?? '').toBe('ready');
+    expect(s.blast!.defaultParams).toMatchObject({ initiation: 'v', rowDelayMs: 42, holeDelayMs: 25 });
+    expect(s.params).toMatchObject({ initiation: 'v', rowDelayMs: 42, holeDelayMs: 25, maxThrow: 10 });
+    expect(s.movement).not.toBeNull();
+    pipeline.dispose();
+  });
+
   it('loads blast → model → movement from the API; source = api, latency recorded; identical to local', async () => {
     const { store, pipeline } = setup();
     await pipeline.settled;
@@ -78,7 +99,7 @@ describe('ApiDataSource through the route handlers', () => {
     expect(s.reconciliation).not.toBeNull(); // derive ran on the decoded payloads
     const urls = routedFetch.mock.calls.map(([u]) => String(u));
     expect(urls.some((u) => /\/model\?v=[0-9a-f]{8}$/.test(u))).toBe(true);
-    expect(urls.some((u) => /\/movement\?freeFace=east&maxThrow=10&.*&seed=42&v=[0-9a-f]{8}$/.test(u))).toBe(true);
+    expect(urls.some((u) => /\/movement\?freeFace=east&initiation=v&rowDelayMs=42&holeDelayMs=25&maxThrow=10&.*&seed=42&v=[0-9a-f]{8}$/.test(u))).toBe(true);
     pipeline.dispose();
   });
 

@@ -9,6 +9,9 @@
  */
 import type { BlastDetail, BlastSummary } from '@/core/api-types';
 import type { BlastParameters, BlockModel, MovementResult } from '@/core/types';
+import { LocalDataSource } from './local';
+
+export { LocalDataSource, isAbortError } from './local';
 
 export type DataSourceKind = 'api' | 'local';
 
@@ -31,11 +34,17 @@ export interface CreateDataSourceOptions {
 }
 
 /**
- * Factory + fallback. Returns an API source that falls back to local on error, or a pure
- * local source. Implemented in a later stage (LocalDataSource at Checkpoint 1, ApiDataSource with
- * the API workstream).
+ * Factory + fallback. Stage 2 (Checkpoint 1) ships only the local source: 'api' is accepted but
+ * falls back to local with a console note until ApiDataSource lands (Stage 4).
  */
 export function createDataSource(options: CreateDataSourceOptions = {}): DataSource {
-  void options;
-  throw new Error('createDataSource: not implemented yet (Stage 0 declares the contract only).');
+  const kind = options.kind ?? parseKind(process.env.NEXT_PUBLIC_DATA_SOURCE) ?? 'api';
+  if (kind === 'api') {
+    console.info('[bmv] DataSource: the API source is not implemented yet; using local compute.');
+  }
+  return new LocalDataSource();
+}
+
+function parseKind(value: string | undefined): DataSourceKind | undefined {
+  return value === 'api' || value === 'local' ? value : undefined;
 }

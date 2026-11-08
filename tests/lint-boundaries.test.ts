@@ -54,7 +54,10 @@ const CASES: Record<string, Case> = {
       '@/data',
       '../../app/page',
       '../../package.json',
-      './blocks.glsl',
+      './blocks.vert',
+      './blocks.frag',
+      'raw-loader!./blocks.glsl',
+      './blocks.glsl?raw',
     ],
     allowed: ['./types', '@/core/types', './defaults', 'd3-contour', 'simplex-noise'],
   },
@@ -74,7 +77,15 @@ const CASES: Record<string, Case> = {
       '../viewer/Viewer',
       '../../app/page',
     ],
-    allowed: ['three', 'three/addons/controls/OrbitControls.js', './disposeBag', '@/state/store', '@/data', '@/core/types'],
+    allowed: [
+      'three',
+      'three/addons/controls/OrbitControls.js',
+      './disposeBag',
+      '@/state/store',
+      '@/data',
+      '@/core/types',
+      './shaders/blocks.vert.glsl', // a .glsl.ts module
+    ],
   },
   ui: {
     file: 'src/ui/__probe__.tsx',

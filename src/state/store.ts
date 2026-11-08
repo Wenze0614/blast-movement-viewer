@@ -82,15 +82,17 @@ export interface AppState {
 
 export interface AppActions {
   setBlasts(blasts: BlastSummary[]): void;
-  /** Select a blast; clears data and selection. */
+  /** Select a blast; clears data and selection. Re-selecting the current blast is a no-op. */
   setBlastId(id: string): void;
   setBlast(detail: BlastDetail): void;
-  /** Merge params (e.g. from the parameter panel). */
+  /** Merge params (e.g. from the parameter panel). Changed params clear movement + derived slots. */
   setParams(patch: Partial<BlastParameters>): void;
   resetParams(): void;
 
   setStatus(status: LoadStatus, error?: string | null): void;
+  /** Clears movement, derived slots and selection (they belong to the previous model). */
   setModel(model: BlockModel, source: DataSourceKind): void;
+  /** Clears the derived slots; the derive step recomputes them for this movement. */
   setMovement(movement: MovementResult, source: DataSourceKind, latencyMs?: number): void;
   setDerived(polygons: DigPolygons | null, reconciliation: AppState['reconciliation']): void;
 
@@ -145,6 +147,28 @@ export function initialAppState(): AppState {
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
+function sameParams(a: BlastParameters, b: BlastParameters): boolean {
+  for (const k of Object.keys(a) as (keyof BlastParameters)[]) if (a[k] !== b[k]) return false;
+  return Object.keys(a).length === Object.keys(b).length;
+}
+
+/**
+ * Invalidating the movement also rewinds playback, atomically: without a movement every block
+ * sits in situ (packInstances), so a kept progress (e.g. 1) would show the old end → in-situ
+ * jump now and an in-situ → new-end jump when the new movement lands at that progress. At
+ * progress 0, paused, the new movement arrives exactly where the blocks already are.
+ */
+const REWIND: Pick<AppState, 'progress' | 'playing'> = { progress: 0, playing: false };
+
+/**
+ * New params make the current movement and everything derived from it stale: clear them so stale
+ * results never show with new inputs, and rewind (REWIND). Unchanged params leave the state as it is.
+ */
+function paramsUpdate(state: AppState, next: BlastParameters): Partial<AppState> {
+  if (sameParams(state.params, next)) return {};
+  return { params: { ...next }, movement: null, polygons: null, reconciliation: null, ...REWIND };
+}
+
 /** Factory so tests (and StrictMode remounts) can get an isolated store. */
 export function createAppStore(initial: Partial<AppState> = {}): AppStore {
   return createStore<AppStoreState>()(
@@ -153,7 +177,8 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       ...initial,
 
       setBlasts: (blasts) => set({ blasts }),
-      setBlastId: (blastId) =>
+      setBlastId: (blastId) => {
+        if (blastId === get().blastId) return;
         set({
           blastId,
           blast: null,
@@ -164,15 +189,30 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
           selection: null,
           progress: 0,
           playing: false,
-        }),
-      setBlast: (blast) => set({ blast, params: { ...blast.defaultParams } }),
-      setParams: (patch) => set({ params: { ...get().params, ...patch } }),
-      resetParams: () => set({ params: { ...(get().blast?.defaultParams ?? DEFAULT_BLAST_PARAMETERS) } }),
+        });
+      },
+      setBlast: (blast) => set({ blast, ...paramsUpdate(get(), blast.defaultParams) }),
+      setParams: (patch) => set(paramsUpdate(get(), { ...get().params, ...patch })),
+      resetParams: () => set(paramsUpdate(get(), get().blast?.defaultParams ?? DEFAULT_BLAST_PARAMETERS)),
 
       setStatus: (status, error = null) => set({ status, error }),
-      setModel: (model, source) => set({ model, source }),
+      // A new model invalidates the movement and everything derived from it, and rewinds.
+      setModel: (model, source) =>
+        set({ model, source, movement: null, polygons: null, reconciliation: null, selection: null, ...REWIND }),
+      // A new movement invalidates the derived slots; the derive step (state/derive.ts) refills them.
+      // It always lands at progress 0 (blocks in situ, no pop). `playing` is kept: a Blast pressed
+      // while the movement was loading (playback holds at 0 meanwhile) starts from the beginning.
       setMovement: (movement, source, latencyMs) =>
-        set({ movement, source, lastLatencyMs: latencyMs ?? null, status: 'ready', error: null }),
+        set({
+          movement,
+          progress: 0,
+          source,
+          lastLatencyMs: latencyMs ?? null,
+          status: 'ready',
+          error: null,
+          polygons: null,
+          reconciliation: null,
+        }),
       setDerived: (polygons, reconciliation) => set({ polygons, reconciliation }),
 
       setColourMode: (colourMode) => set({ colourMode }),

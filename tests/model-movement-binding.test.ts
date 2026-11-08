@@ -175,4 +175,86 @@ describe('model–movement binding across fallback + API recovery', () => {
     watch.unsub();
     pipeline.dispose();
   });
+
+  it('last-resort local path: the blast detail (pattern, holes) comes from local compute too, params are kept', async () => {
+    // API up from the start on a different config (B): its detail and model are B, but every
+    // movement it returns belongs to yet another model (C) → resync fails → local for all three.
+    const cfgB = { ...cfgA, seed: cfgA.seed + 1 };
+    const modelC = generateBlockModel({ ...cfgA, seed: cfgA.seed + 9 });
+    const api = fakeApi(cfgB, { movementFor: () => modelC });
+    api.up = true;
+    const apiDetail = await api.getBlast();
+    const localDetail = await new LocalDataSource().getBlast(cfgA.id);
+    expect(apiDetail.holes.map((h) => h.sampledGrade)).not.toEqual(localDetail.holes.map((h) => h.sampledGrade));
+
+    const store = createAppStore();
+    const watch = watchPairs(store);
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource()));
+    await pipeline.settled;
+    store.getState().setParams({ maxThrow: 12 });
+    await pipeline.settled;
+
+    const s = store.getState();
+    expect(watch.violations).toEqual([]);
+    expect(s.status).toBe('ready');
+    expect(s.source).toBe('local');
+    expect(s.model!.configHash).toBe(modelA.configHash);
+    expect(s.blast).toEqual(localDetail); // hole layer metadata matches the local model
+    expect(s.blast!.blockCount).toBe(s.model!.count);
+    expect(s.params.maxThrow).toBe(12); // not reset to the detail's defaults
+    expect(s.movement!.params.maxThrow).toBe(12);
+    watch.unsub();
+    pipeline.dispose();
+  });
+
+  it('a superseded last-resort local load (ignores abort, resolves late with a mismatched pair) never touches the newer status', async () => {
+    const modelC = generateBlockModel({ ...cfgA, seed: cfgA.seed + 9 });
+    const opts: { movementFor?: () => BlockModel } = { movementFor: () => modelC };
+    const api = fakeApi(cfgA, opts); // broken: movements belong to model C
+    api.up = true;
+
+    // Local source that ignores the abort signal, is held at a gate, and returns a MISMATCHED pair.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const reached = new Promise<void>((r) => (entered = r));
+    const realLocal = new LocalDataSource();
+    const slowLocal: DataSource = {
+      kind: 'local',
+      listBlasts: () => realLocal.listBlasts(),
+      getBlast: (id) => realLocal.getBlast(id),
+      async getModel() {
+        entered();
+        await gate;
+        return modelA;
+      },
+      async getMovement(_id, params) {
+        return computeMovement(modelC, params); // not modelA's
+      },
+    };
+
+    const store = createAppStore();
+    const watch = watchPairs(store);
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource()), { local: slowLocal });
+    await reached; // initial load: mismatch → resync → mismatch → held in the local path
+
+    opts.movementFor = undefined; // API fixed: the next request gets a consistent pair
+    store.getState().setParams({ maxThrow: 14 }); // supersedes (aborts) the held request
+    await new Promise((r) => setTimeout(r, 20));
+    let s = store.getState();
+    expect(s.status).toBe('ready');
+    expect(s.movement!.params.maxThrow).toBe(14);
+    const newer = { status: s.status, error: s.error, movement: s.movement, model: s.model, blast: s.blast, fallback: s.fallback };
+
+    release(); // the stale local load now resolves with its mismatched pair
+    await pipeline.settled;
+    s = store.getState();
+    expect({ status: s.status, error: s.error, movement: s.movement, model: s.model, blast: s.blast, fallback: s.fallback }).toEqual(newer);
+    expect(s.status).toBe('ready');
+    expect(s.error).toBeNull();
+    expect(s.source).toBe('api');
+    expect(watch.violations).toEqual([]);
+    watch.unsub();
+    pipeline.dispose();
+  });
 });

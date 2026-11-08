@@ -258,3 +258,59 @@ describe('model–movement binding across fallback + API recovery', () => {
     pipeline.dispose();
   });
 });
+
+describe('blast detail ↔ model source (P9 hole layer)', () => {
+  /** API answers the detail (newer deploy, config B) but its model / movement fail (e.g. 409). */
+  function detailOnlyApi(cfgB: BlastConfig) {
+    const modelB = generateBlockModel(cfgB);
+    return {
+      kind: 'api' as const,
+      detailB: buildBlastDetail(cfgB, modelB),
+      async listBlasts() {
+        return [buildBlastSummary(cfgB)];
+      },
+      async getBlast() {
+        return buildBlastDetail(cfgB, modelB);
+      },
+      async getModel(): Promise<BlockModel> {
+        throw new TypeError('409 STALE_VERSION');
+      },
+      async getMovement(): Promise<never> {
+        throw new TypeError('409 STALE_VERSION');
+      },
+    } satisfies DataSource & Record<string, unknown>;
+  }
+
+  it('an API detail over a local model is replaced by the detail built from that model; params kept', async () => {
+    const api = detailOnlyApi({ ...cfgA, seed: cfgA.seed + 1 });
+    const localDetail = await new LocalDataSource().getBlast(cfgA.id);
+    expect(api.detailB.holes.map((h) => h.sampledGrade)).not.toEqual(localDetail.holes.map((h) => h.sampledGrade));
+
+    const store = createAppStore();
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
+    await pipeline.settled;
+    let s = store.getState();
+    expect(s.source).toBe('local');
+    expect(s.model!.configHash).toBe(modelA.configHash);
+    expect(s.blast).toEqual(localDetail); // holes derived from the model actually shown
+
+    store.getState().setParams({ maxThrow: 12 });
+    await pipeline.settled;
+    s = store.getState();
+    expect(s.blast).toEqual(localDetail);
+    expect(s.params.maxThrow).toBe(12);
+    expect(s.status).toBe('ready');
+    pipeline.dispose();
+  });
+
+  it('a detail that already matches the local model is not replaced (no needless hole-layer rebuild)', async () => {
+    const store = createAppStore();
+    const blasts: unknown[] = [];
+    store.subscribe((st) => st.blast, (b) => blasts.push(b));
+    const pipeline = startDataPipeline(store, new LocalDataSource());
+    await pipeline.settled;
+    expect(blasts).toHaveLength(1); // setBlast only
+    pipeline.dispose();
+  });
+});
+

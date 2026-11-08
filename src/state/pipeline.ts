@@ -17,9 +17,19 @@
  * loaded from local compute (always consistent) and `store.fallback` is set, so the source badge
  * reads "Local fallback". Only a mismatch inside local compute itself is reported as an error,
  * and only while that request is still current.
+ *
+ * Blast detail ↔ model (P9): the hole layer draws `store.blast.holes`, whose sampled grades are
+ * derived from the model. The detail and the model are separate calls with per-call fallback, so
+ * an API detail (no `?v=` on that route) could sit over a local model after a deploy. Whenever a
+ * model from local compute is stored, the detail is rebuilt from that model and the local config
+ * (`buildBlastDetail`), so the holes always come from the same source as the model.
  */
+import type { BlastDetail } from '@/core/api-types';
+import { getBlastConfig } from '@/core/blasts';
+import { buildBlastDetail } from '@/core/holes';
 import { isMovementFor } from '@/core/movement';
-import { isAbortError, LocalDataSource, type DataSource } from '@/data';
+import type { BlockModel } from '@/core/types';
+import { isAbortError, LocalDataSource, type DataSource, type DataSourceKind } from '@/data';
 import { attachDerive } from './derive';
 import type { AppState, AppStore } from './store';
 
@@ -27,6 +37,16 @@ export interface DataPipeline {
   /** Resolves when the current blast (or movement) load has settled. Useful in tests. */
   readonly settled: Promise<void>;
   dispose(): void;
+}
+
+/** Same pattern and holes (the parts the hole layer draws)? */
+function sameHoles(a: BlastDetail, b: BlastDetail): boolean {
+  if (a.holes.length !== b.holes.length) return false;
+  const same3 = (p: readonly number[], q: readonly number[]) => p[0] === q[0] && p[1] === q[1] && p[2] === q[2];
+  return a.holes.every((h, i) => {
+    const o = b.holes[i];
+    return h.id === o.id && h.sampledGrade === o.sampledGrade && same3(h.collar, o.collar) && same3(h.toe, o.toe);
+  });
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -54,6 +74,21 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
     store.getState().setStatus('error', message(err));
   };
 
+  /**
+   * Store a model and keep the blast detail on the same source: a local model gets the detail
+   * built from it (only written when its holes differ, so the hole layer doesn't rebuild for
+   * nothing). Not setBlast(): that would reset params to the detail's defaults.
+   */
+  function applyModel(blastId: string, model: BlockModel, kind: DataSourceKind): void {
+    store.getState().setModel(model, kind);
+    if (kind !== 'local') return;
+    const cfg = getBlastConfig(blastId);
+    const current = store.getState().blast;
+    if (!cfg || !current || current.id !== blastId) return;
+    const detail = buildBlastDetail(cfg, model);
+    if (!sameHoles(current, detail)) store.setState({ blast: detail });
+  }
+
   /** `resync`: may this load reload the model once if the movement doesn't belong to it? */
   async function loadMovement(resync = true): Promise<void> {
     const { model, blastId, params } = store.getState();
@@ -79,7 +114,7 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
         console.warn(`[bmv] ${detail}; reloading a consistent model + movement.`);
         const fresh = await data.getModel(blastId, ctrl.signal);
         if (!isCurrent()) return;
-        if (fresh !== model) store.getState().setModel(fresh, data.kind);
+        if (fresh !== model) applyModel(blastId, fresh, data.kind);
         return await loadMovement(false);
       }
       store.getState().setMovement(movement, data.kind, now() - t0);
@@ -137,7 +172,7 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
       store.getState().setBlast(detail);
       const model = await data.getModel(id, ctrl.signal);
       if (!isCurrent()) return;
-      store.getState().setModel(model, data.kind);
+      applyModel(id, model, data.kind);
       await loadMovement(); // reports its own errors, guarded by its own staleness check
     } catch (err) {
       fail(err, isCurrent);

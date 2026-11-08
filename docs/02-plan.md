@@ -30,7 +30,7 @@
 **MVP = Checkpoint 1: live on Vercel by ~16:00 Sunday** (client-only is fine; the API arrives later the same day behind the same interface)
 | ID | Feature | Acceptance criteria |
 |---|---|---|
-| M1 | Synthetic block model | Deterministic from a seed: same seed gives identical arrays. Default 40×24×4 blocks of 2.5 m (3,840 blocks, 100×60×10 m bench). A dipping ore lens plus noise gives about 15–30% ore by tonnes. Grade classes: waste < 0.5, low 0.5–1.5, high ≥ 1.5 g/t Au. Unit test: Σ tonnes = Σ volume × density. |
+| M1 | Synthetic block model | Deterministic from a seed: same seed gives identical arrays. Default bounding grid 40×24×4 blocks of 2.5 m (3,840 cells, 100×60×10 m bench); the blast outline keeps 3,200 blocks. A dipping ore lens plus noise gives about 15–30% ore by tonnes. Grade classes: waste < 0.5, low 0.5–1.5, high ≥ 1.5 g/t Au. Unit test: Σ tonnes = Σ volume × density. |
 | M2 | Instanced 3D render | **One draw call** for all blocks (check `renderer.info.render.calls`). Grade colours with a legend. Orbit camera. ≥ 55 fps on a typical laptop in Chrome at 3,840 blocks. |
 | M3 | Movement model | Pure function `computeMovement(model, params)`. Unit tests: (a) **no two blocks share a post-blast slot**, (b) **no floating blocks**, (c) tonnes and metal conserved exactly, (d) deterministic per seed, (e) mean horizontal displacement is larger in the top flitch than the bottom one, and larger at the front row than the back row. Runs in < 50 ms for 3,840 blocks. |
 | M4 | Blast animation and scrubber | A "Blast" button animates 0→1 over about 2.5 s with front rows firing first. A slider scrubs in either direction. Per-frame CPU work = **one uniform update**. No popping at t = 0 or 1. |
@@ -49,7 +49,7 @@
 | P3 | Section/slice slider + "ore only" toggle | Shows ore pushed under waste. A `uSection` plane uniform + `discard` in the block shader. |
 | P4 | Visual quality | Shader edge-darkening, hemisphere + directional lighting, optional baked per-block occlusion (`aOcclusion`), translucent dig-line curtain, unblasted context rock, plan-view camera button. No post-processing. |
 | P5 | Blast parameter panel → **movement endpoint** | Debounced (~300 ms) `GET /api/blasts/:id/movement?...`. Animates to the new result. Falls back to local compute if the API fails. |
-| P6 | Performance via the **dense demo blast** | `b1040-031` = 80×48×8 = 30,720 blocks served by the API. FPS overlay in dev. Replaces the old client-side "dense toggle". |
+| P6 | Performance via the **dense demo blast** | `b1040-031` = 80×48×8 bounding grid (30,720 cells), 27,088 blocks inside its outline, served by the API. FPS overlay in dev. Replaces the old client-side "dense toggle". |
 | P7 | README, About modal, Loom | See §7. |
 | **P8** | **API** (ADR-10/11/12) | Next.js route handlers: `GET /api/blasts`, `GET /api/blasts/:id`, `GET /api/blasts/:id/model` (binary), `GET /api/blasts/:id/movement` (binary, CDN-cached), `GET /api/health`. Zod-validated. Codec round-trip and endpoint tests. Blast picker in the panel header. |
 | **P9** | **Blasthole layer** | Instanced cylinders on the burden × spacing pattern, coloured by sampled grade. Visible before the blast, fading out during it. Labelled "illustrative pattern, not used by the movement heuristic". |
@@ -234,11 +234,11 @@ export interface DataSource {
 - **Choice:** (b): zero config, your familiar pattern, zod by hand. Switch to (c) only if the route count grows. The API is a **thin BFF over the movement "engine"**: it lists demo blasts, serves block models and computes movement on demand from the seeded configs. No proprietary data.
 - **Demo data** (`core/blasts.ts`, shared by local and API):
 
-  | id | Name | Model | Purpose |
+  | id | Name | Bounding grid (cells) → blocks inside the outline | Purpose |
   |---|---|---|---|
-  | `b1040-017` | Bench 1040 · Blast 017 | 40×24×4 @ 2.5 m (3,840), single dipping lens | Default story |
-  | `b1030-022` | Bench 1030 · Blast 022 | 40×24×4 @ 2.5 m, two pods with a waste parting | Shows it generalises |
-  | `b1040-031` | Bench 1040 · Blast 031 (dense) | 80×48×8 @ 1.25 m (30,720) | Performance |
+  | `b1040-017` | Bench 1040 · Blast 017 | 40×24×4 @ 2.5 m (3,840) → 3,200, ragged face, single dipping lens | Default story |
+  | `b1030-022` | Bench 1030 · Blast 022 | 40×24×4 @ 2.5 m (3,840) → 3,088, L-shape, two pods with a waste parting | Shows it generalises |
+  | `b1040-031` | Bench 1040 · Blast 031 (dense) | 80×48×8 @ 1.25 m (30,720) → 27,088, notched | Performance |
 
 - **Sketch:**
   ```ts
@@ -262,7 +262,7 @@ export interface DataSource {
 ### ADR-11: Data transport (binary, columnar)
 - **Options:** JSON (3–5× bigger, slow `JSON.parse`, boxed numbers); **custom length-prefixed binary SoA**; Apache Arrow IPC; 3D Tiles / tiled glTF.
 - **Choice:** custom binary with a JSON header and a **shared codec** (`core/codec.ts`) used by the server (encode) and the client (decode → typed-array *views*, no copy). Round-trip unit test.
-- **Layout** (little-endian, sections 4-byte aligned, all Float32 before Uint8):
+- **Layout** (little-endian, sections 4-byte aligned; Float32, then Uint32, then Uint8; `schemaVersion` 2 since sparse models, v1 payloads are rejected):
 
   | Section | Type | Length |
   |---|---|---|
@@ -271,10 +271,13 @@ export interface DataSource {
   | header JSON (utf-8, padded) | | `{ schemaVersion, kind, count, grid, grades, fields:[{name,type,offset,length}], … }` |
   | `centroid` | Float32 | 3N |
   | `grade`, `density`, `tonnes` | Float32 | N each |
+  | `cell` (grid cell `i + nx·(j + ny·k)` per block, strictly increasing) | Uint32 | N |
   | `rockType`, `oreClass` | Uint8 | N each |
 
+  N = blocks present (≤ nx·ny·nz: the grid is the bounding box of an irregular blast outline). Decode rejects `cell` values that are not strictly increasing or lie outside the grid (`BAD_DATA`).
+
   Movement payload: `end` (Float32 3N), `delay` (Float32 N), `surface.height` (Float32 nx·ny). The header carries `looseScale`, `postGrid`, the echoed `params` and `paramsHash`.
-- **Size:** 26 B/block → 3,840 blocks ≈ 100 KB, 30,720 ≈ 800 KB, before compression. ⚠️ Check whether Vercel compresses `application/octet-stream`; if not, pre-compress or accept the size.
+- **Size:** 30 B/block → 3,200 blocks ≈ 97 KB, 27,088 ≈ 813 KB, before compression. ⚠️ Check whether Vercel compresses `application/octet-stream`; if not, pre-compress or accept the size.
 - **At scale:** Arrow/Parquet for analytics interop, or **tiled, range-requestable chunks** (per bench/flitch tile + LOD level) streamed into the instanced renderer.
 
 ### ADR-12: Caching, validation and compute placement
@@ -322,11 +325,15 @@ export interface GradeSettings {
   highGrade: number;     // 1.5  (display class split)
 }
 
-/** Storage: struct-of-arrays. Index: id = i + nx * (j + ny * k) */
+/**
+ * Storage: struct-of-arrays over the PRESENT blocks only (sparse: a blast outline selects the
+ * columns). Block id = array index; cell[id] = grid cell i + nx * (j + ny * k), strictly increasing.
+ */
 export interface BlockModel {
-  grid: GridSpec;
+  grid: GridSpec;             // bounding grid: count <= nx * ny * nz
   grades: GradeSettings;
-  count: number;              // 3840
+  count: number;              // 3200 (b1040-017: 3,840 cells, 3,200 inside the outline)
+  cell: Uint32Array;          // count, grid cell index per block
   centroid: Float32Array;     // 3*count, m
   grade: Float32Array;        // g/t Au, e.g. 0.12 .. 6.0
   density: Float32Array;      // t/m³ in situ, e.g. 2.65 waste, 2.75 mineralised

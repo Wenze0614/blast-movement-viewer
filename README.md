@@ -22,9 +22,13 @@ Media to capture in a browser (not yet recorded); add the image links once the f
 
 ## What it shows
 
-- **Before / after block model.** Three seeded demo blasts: two 3,840-block benches (2.5 m blocks)
-  and a dense 30,720-block bench (1.25 m blocks). Press **Blast** or scrub the timeline: every
-  block follows its own movement vector out from the free face, the rock swells and slumps.
+- **Before / after block model.** Three seeded demo blasts with irregular outlines (a ragged face,
+  an L-shape, a notched bench): 3,200 and 3,088 blocks of 2.5 m, and a dense 27,088-block blast of
+  1.25 m blocks. Press **Blast** or scrub the timeline: every block follows its own movement vector
+  out from the free face, the rock swells and slumps.
+- **Pit context.** A synthetic, seeded terrain around the blast: the floor it sits on, the open
+  floor in front of its free face (stepping down to the bench below), unblasted bench rock around
+  its outline and two upper benches behind, with an irregular surveyed edge. Display only.
 - **Blastholes.** The burden × spacing pattern as instanced cylinders coloured by the hole's
   sampled grade. Visible before the blast and fading out as it fires. Labelled *illustrative
   pattern, not used by the movement heuristic*.
@@ -121,16 +125,17 @@ npm run build && npm run start   # production build
 
 Model and movement travel as **BMV1**, a small binary, columnar (struct-of-arrays) format shared by
 server and client (`src/core/codec.ts`): magic `BMV1`, a uint32 header length, a JSON header
-(`schemaVersion`, `kind`, `count`, field table and metadata), then 4-byte-aligned Float32 and Uint8
-sections. Decode returns typed-array **views** on the response buffer (no per-block objects, no
+(`schemaVersion`, `kind`, `count`, field table and metadata), then 4-byte-aligned Float32, Uint32
+and Uint8 sections. Models are **sparse**: only blocks inside the blast outline are sent, each with
+its grid cell index (`cell`, Uint32, strictly increasing; schema v2). Decode returns typed-array **views** on the response buffer (no per-block objects, no
 copies), which go straight into GPU attributes. Malformed payloads throw typed `CodecError`s.
 
-Measured response sizes (Stage 4):
+Measured response sizes:
 
-| Payload | 3,840 blocks | 30,720 blocks |
+| Payload | 3,200 blocks | 27,088 blocks |
 |---|---|---|
-| Model (`centroid, grade, density, tonnes, rockType, oreClass`) | 100,464 B | 799,356 B |
-| Movement (`end, delay, surface.height`; `start`, `displacement` and `distance` are derived on decode) | 74,280 B | 538,032 B |
+| Model (`centroid, grade, density, tonnes, cell, rockType, oreClass`) | 96,680 B | 813,336 B |
+| Movement (`end, delay, surface.height`; `start`, `displacement` and `distance` are derived on decode) | 64,036 B | 479,920 B |
 
 These are uncompressed: `next start` does not gzip `application/octet-stream` (gzip would make
 them about 4× smaller; still open for the deploy).
@@ -187,14 +192,19 @@ rather than aborted.
 ## Movement heuristic (stand-in for an engine)
 
 Mine coordinates: x = East, y = North, z = elevation (Z-up, metres). Free face east, throw +x.
-With s = distance from the free face ÷ bench length (0 = front row) and h = height in the bench
-(1 = crest):
+The outline is irregular, so the face is too: each lateral strip (one block column wide) has its
+face at the front of its own blocks (`src/core/footprint.ts`). With s = distance from the strip's
+face ÷ footprint depth (0 = front row) and h = height in the bench (1 = crest):
 
 1. **Target displacement.** Throw `T = T_max · [r_back + (1 − r_back)(1 − s)^p] · [r_toe + (1 − r_toe)·h] · (1 + 0.25·R·n₁)`;
-   lateral `L = R·σ_lat·n₂ + fan·((y − y_c)/(W/2))·(1 − s)`. n₁ and n₂ are seeded 3D simplex
+   lateral `L = R·σ_lat·n₂ + fan·((y − y_c)/(W/2))·(1 − s)` (y_c, W: the footprint's lateral centre and width). n₁ and n₂ are seeded 3D simplex
    noise, so neighbours move coherently. The defaults give ~6–10 m at the crest and ~3–4 m at the toe.
 2. **Swell and re-grid.** k = swell^(1/3). Targets are binned onto a post-blast plan grid with cell
-   size c·k and clamped behind the back wall.
+   size c·k. Rock lands only on free ground: the blast footprint or the open floor in front of the
+   face (a bay about 45 m deep and 30 m wider than the blast each side). A cell is taken only if
+   the whole swollen block fits on free ground **and** the block's animated box stays over free
+   ground (within the terrain's 1.25 m floor margin) all the way there, so no block meets the pit
+   terrain, settled or in flight. A blocked target moves to the nearest reachable cell.
 3. **Stacking.** Each cell stacks its blocks by original elevation, so nothing floats or overlaps.
    Loose volume = swell × bank volume exactly (unit-tested).
 4. **Angle of repose.** The tallest offending stack moves its top block to the lowest valid
@@ -210,7 +220,8 @@ With s = distance from the free face ÷ bench length (0 = front row) and h = hei
 
 **Known simplifications:** no timing, explosive or rock physics; vertical order is preserved within
 a column; positions snap to the post-blast lattice (no sub-block mixing); one free face; a single
-dig horizon.
+dig horizon; blocks fly in straight lines, so a pile against a corner of unblasted rock can stand a
+little steeper than the repose angle (no block could reach the lower cell without crossing the rock).
 
 **Dig lines.** Column tonnage-weighted grade per plan cell (the in-situ grid for the original line,
 the post-blast grid for the adjusted one), a one-cell Gaussian blur (a stand-in for minimum mining
@@ -235,15 +246,17 @@ Reconciliation runs on the client: it is cheap and has to follow every parameter
 
 ## Performance
 
-- **Movement compute:** about 2 ms for 3,840 blocks and 15 ms for 30,720 blocks (measured during
-  development). An API movement round trip on a cold seed took 16–42 ms end to end locally.
+- **Movement compute:** about 4–6 ms for the 3,200-block blasts and 40 ms for 27,088 blocks
+  (measured during development; the free-path checks on every destination are most of it).
+  Building the pit terrain (~33k vertices, ~48k triangles) takes about 20–25 ms, once per blast. An API movement round trip on a cold seed took 16–42 ms end to end locally.
 - **Draw calls:** one per layer. The blocks are **one** draw call at any block count and the holes
-  one, plus the floor, the grid and the two dig lines.
+  one, plus the terrain and the two dig lines.
 - **Per-frame CPU while scrubbing or playing:** the `uProgress` and `uOpacity` uniform writes.
 - **Frame rate:** measured with the FPS overlay during playback in the development test browser
   (an embedded Chromium pane on an Apple M4 Pro, 581 × 859 px at DPR 1, whose
   `requestAnimationFrame` is capped at about 50 Hz even on an idle page): **both the 3,840-block
-  and the 30,720-block (370k triangles) blasts ran at that cap**, 5 draw calls each. That shows
+  and the 30,720-block (370k triangles) blasts ran at that cap**, 5 draw calls each (measured
+  before the irregular outlines, which only reduced the block counts). That shows
   the engine keeps up with the display, not its ceiling; press **FPS** to measure on your own
   machine and display.
 

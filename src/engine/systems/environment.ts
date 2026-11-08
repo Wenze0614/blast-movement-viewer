@@ -1,13 +1,20 @@
 /**
- * animate/environment: a dark floor and a 10 m grid at the bench toe for spatial context.
- * Rebuilt when the model (bench extent) changes. Stock materials, no lights needed.
+ * animate/environment: the synthetic pit around the blast (core/terrain.ts): the floor the blast
+ * sits on, the open floor in front of its free face, unblasted bench rock around its outline and
+ * upper benches behind. One static indexed mesh with an owned ShaderMaterial (no scene lights).
+ * Rebuilt when the model or the free face changes.
  */
 import * as THREE from 'three';
-import type { BlockModel } from '@/core/types';
+import { buildPitTerrain } from '@/core/terrain';
+import type { BlastParameters, BlockModel } from '@/core/types';
+import terrainFrag from '../shaders/terrain.frag.glsl';
+import { createTerrainUniforms } from '../shaders/terrain.uniforms';
+import terrainVert from '../shaders/terrain.vert.glsl';
 import type { SystemFactory } from '../types';
+import { packTerrain } from './terrainGeometry';
 
-/** Grid line spacing, m. */
-export const GRID_SPACING = 10;
+/** Scene name of the terrain mesh (the picking system occludes blocks behind it). */
+export const TERRAIN_MESH_NAME = 'terrain';
 
 export const createEnvironmentSystem: SystemFactory = (ctx) => {
   const { store, scene, bag } = ctx;
@@ -15,53 +22,57 @@ export const createEnvironmentSystem: SystemFactory = (ctx) => {
   group.name = 'environment';
   scene.add(group);
 
-  const floorMaterial = bag.track(new THREE.MeshBasicMaterial({ color: '#2a2f37' }));
-  let floorGeometry: THREE.PlaneGeometry | null = null;
-  let grid: THREE.GridHelper | null = null;
+  const material = bag.track(
+    new THREE.ShaderMaterial({
+      name: 'terrain',
+      uniforms: createTerrainUniforms(),
+      vertexShader: terrainVert,
+      fragmentShader: terrainFrag,
+    }),
+  );
+  let geometry: THREE.BufferGeometry | null = null;
 
   const clear = () => {
     group.clear();
-    floorGeometry?.dispose();
-    floorGeometry = null;
-    if (grid) {
-      grid.geometry.dispose();
-      (grid.material as THREE.Material).dispose();
-      grid = null;
-    }
+    geometry?.dispose();
+    geometry = null;
   };
   bag.track(() => {
     clear();
     scene.remove(group);
   });
 
-  const build = (model: BlockModel | null) => {
+  const build = (model: BlockModel | null, face: BlastParameters['freeFace']) => {
     clear();
     if (model) {
-      const { origin, blockSize, nx, ny } = model.grid;
-      const w = nx * blockSize[0];
-      const h = ny * blockSize[1];
-      const cx = origin[0] + w / 2;
-      const cy = origin[1] + h / 2;
-      const size = Math.ceil((Math.max(w, h) * 3) / GRID_SPACING) * GRID_SPACING;
-      floorGeometry = new THREE.PlaneGeometry(size, size); // lies in XY, faces +Z: Z-up native
-      const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-      floor.position.set(cx, cy, origin[2] - 0.02);
-      floor.name = 'floor';
-      grid = new THREE.GridHelper(size, size / GRID_SPACING, '#4a515c', '#363c45');
-      grid.rotation.x = Math.PI / 2; // GridHelper is built in XZ; rotate into the XY (plan) plane
-      grid.position.set(cx, cy, origin[2] - 0.01);
-      group.add(floor, grid);
+      const arrays = packTerrain(buildPitTerrain(model, face));
+      geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(arrays.position, 3));
+      geometry.setAttribute('normal', new THREE.BufferAttribute(arrays.normal, 3));
+      geometry.setIndex(new THREE.BufferAttribute(arrays.index, 1));
+      geometry.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = TERRAIN_MESH_NAME;
+      mesh.matrixAutoUpdate = false;
+      group.add(mesh);
     }
     ctx.invalidate();
   };
 
-  bag.track(store.subscribe((s) => s.model, build));
+  bag.track(
+    store.subscribe(
+      (s) => [s.model, s.params.freeFace] as const,
+      ([model, face]) => build(model, face),
+      { equalityFn: (a, b) => a[0] === b[0] && a[1] === b[1] },
+    ),
+  );
 
   return {
     name: 'environment',
     phase: 'animate',
     init() {
-      build(store.getState().model);
+      const s = store.getState();
+      build(s.model, s.params.freeFace);
     },
     dispose() {},
   };

@@ -6,7 +6,7 @@
  */
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { blockIndex } from '@/core/blockModel';
+import { blockIdAt } from '@/core/blockModel';
 import { LocalDataSource } from '@/data';
 import { createAppStore, type AppStore } from '@/state/store';
 import { createDisposeBag } from '../disposeBag';
@@ -14,6 +14,7 @@ import blocksFrag from '../shaders/blocks.frag.glsl';
 import blocksVert from '../shaders/blocks.vert.glsl';
 import { registerSystems } from '../systems';
 import { createBlocksSystem } from '../systems/blocks';
+import { createEnvironmentSystem } from '../systems/environment';
 import { CLICK_SLOP_PX, createPickingSystem } from '../systems/picking';
 import type { EngineContext } from '../types';
 
@@ -51,7 +52,7 @@ function click(ctx: EngineContext, x = W / 2, y = H / 2, init: PointerEventInit 
 
 /** Top-flitch block (k = nz − 1) at plan cell (i, j), and its in-situ centroid. */
 function topBlock(i: number, j: number) {
-  const id = blockIndex(model.grid, i, j, model.grid.nz - 1);
+  const id = blockIdAt(model, i, j, model.grid.nz - 1);
   return { id, x: model.centroid[3 * id], y: model.centroid[3 * id + 1] };
 }
 
@@ -118,7 +119,7 @@ describe('picking system (P2)', () => {
   it('camera inside a block or with the top face near-clipped picks what is drawn: the block below', () => {
     const ctx = setup();
     const b = topBlock(12, 7);
-    const below = blockIndex(model.grid, 12, 7, model.grid.nz - 2);
+    const below = blockIdAt(model, 12, 7, model.grid.nz - 2);
     const top = model.centroid[3 * b.id + 2] + model.grid.blockSize[2] / 2;
     // Inside the top block.
     ctx.camera.position.set(b.x, b.y - 0.001, top - 0.5);
@@ -174,8 +175,9 @@ describe('picking system (P2)', () => {
     let col: { id: number; x: number; y: number } | null = null;
     for (let i = 0; i < model.grid.nx && !col; i++) {
       for (let j = 0; j < model.grid.ny && !col; j++) {
+        if (blockIdAt(model, i, j, 0) < 0) continue; // outside the blast outline: no column
         let anyOre = false;
-        for (let k = 0; k < model.grid.nz; k++) anyOre ||= model.grade[blockIndex(model.grid, i, j, k)] >= model.grades.cutoff;
+        for (let k = 0; k < model.grid.nz; k++) anyOre ||= model.grade[blockIdAt(model, i, j, k)] >= model.grades.cutoff;
         if (!anyOre) col = topBlock(i, j);
       }
     }
@@ -186,6 +188,31 @@ describe('picking system (P2)', () => {
     ctx.store.getState().setOreOnly(false);
     click(ctx);
     expect(ctx.store.getState().selection).toBe(col!.id);
+  });
+
+  it('terrain occludes: a block hidden behind the pit terrain is not picked; a visible one still is (Codex review)', async () => {
+    const ctx = mockCtx();
+    const env = createEnvironmentSystem(ctx, {});
+    await env.init?.();
+    createPickingSystem(ctx, {});
+    ctx.store.getState().setModel(model, 'local');
+    // Low view from the south, below the crest of the bench rock south of the blast: the ray hits
+    // the terrain (≈ 68 m) before any block (the first block behind it is ≈ 76 m away).
+    ctx.camera.position.set(50, -70, 1050);
+    ctx.camera.lookAt(50, 30, 1035);
+    ctx.camera.updateProjectionMatrix();
+    ctx.camera.updateMatrixWorld();
+    const terrain = ctx.scene.getObjectByName('terrain') as THREE.Mesh;
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(0, 0), ctx.camera);
+    expect(ray.intersectObject(terrain, false)[0]?.distance).toBeLessThan(75);
+    click(ctx);
+    expect(ctx.store.getState().selection).toBeNull();
+    // Looking straight down at a top block: nothing in front of it, so it is picked.
+    const b = topBlock(12, 7);
+    lookDownAt(ctx, b.x, b.y);
+    click(ctx);
+    expect(ctx.store.getState().selection).toBe(b.id);
   });
 
   it('dispose removes the listeners', () => {

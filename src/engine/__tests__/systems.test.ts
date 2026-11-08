@@ -76,7 +76,7 @@ describe('blocks system (M2/M4)', () => {
     expect(mesh.material).toBeInstanceOf(THREE.ShaderMaterial);
     expect(mesh.frustumCulled).toBe(false);
     const geo = mesh.geometry as THREE.InstancedBufferGeometry;
-    expect(geo.instanceCount).toBe(3840);
+    expect(geo.instanceCount).toBe(3200);
     for (const name of ['aStart', 'aEnd', 'aDelay', 'aColor']) {
       expect(geo.getAttribute(name)).toBeInstanceOf(THREE.InstancedBufferAttribute);
     }
@@ -339,14 +339,31 @@ describe('dig lines + environment systems', () => {
     expect(ctx.scene.children).toHaveLength(0);
   });
 
-  it('environment builds a floor + grid for the model and disposes them', async () => {
+  it('environment builds ONE terrain mesh (owned ShaderMaterial) for the model, rebuilds on a free-face change and disposes it', async () => {
     const ctx = mockCtx();
     const system = createEnvironmentSystem(ctx, {});
     await system.init?.();
+    expect(ctx.scene.getObjectByName('terrain')).toBeUndefined();
     ctx.store.getState().setModel(model, 'local');
-    const floor = ctx.scene.getObjectByName('floor') as THREE.Mesh;
-    expect(floor).toBeDefined();
-    expect(floor.position.z).toBeLessThan(model.grid.origin[2]);
+    const terrain = ctx.scene.getObjectByName('terrain') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    expect(terrain).toBeInstanceOf(THREE.Mesh);
+    expect(terrain.material).toBeInstanceOf(THREE.ShaderMaterial);
+    expect(terrain.geometry.getIndex()!.count).toBeGreaterThan(0);
+    const z = terrain.geometry.getAttribute('position');
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let v = 0; v < z.count; v++) {
+      minZ = Math.min(minZ, z.getZ(v));
+      maxZ = Math.max(maxZ, z.getZ(v));
+    }
+    expect(minZ).toBeLessThan(model.grid.origin[2]); // the bench below
+    expect(maxZ).toBeGreaterThan(model.grid.origin[2] + 10); // upper benches behind
+    const first = terrain.geometry;
+    ctx.store.getState().setParams({ maxThrow: 4 }); // params other than the face: no rebuild
+    expect((ctx.scene.getObjectByName('terrain') as THREE.Mesh).geometry).toBe(first);
+    ctx.store.getState().setParams({ freeFace: 'north' });
+    expect((ctx.scene.getObjectByName('terrain') as THREE.Mesh).geometry).not.toBe(first);
+    expect(ctx.scene.getObjectsByProperty('name', 'terrain')).toHaveLength(1);
     const watch = watchDisposal(ctx.scene);
     system.dispose();
     ctx.bag.disposeAll();

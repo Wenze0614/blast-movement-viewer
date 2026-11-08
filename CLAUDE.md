@@ -29,7 +29,8 @@ Code against these. If a contract is wrong, say so in the PR and change it there
 ## Conventions
 
 1. **Mine coordinates, Z-up, metres.** x = East, y = North, z = elevation (RL). Grid origin is the
-   MIN corner of the first block; block id = `i + nx * (j + ny * k)`. Call
+   MIN corner of the first block; grid cell = `i + nx * (j + ny * k)`. Models are sparse (only
+   blocks inside the blast outline): block id = array index, `model.cell[id]` = its grid cell. Call
    `THREE.Object3D.DEFAULT_UP.set(0, 0, 1)` before creating objects; no axis conversions anywhere.
    Units in names or comments: m, t, t/m³, g/t Au, g (oz = g / 31.1035).
 2. **Layer boundaries** (`eslint.config.mjs`: path zones via `import/no-restricted-paths` +

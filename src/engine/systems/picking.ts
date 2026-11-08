@@ -6,6 +6,8 @@
  *
  * Only what the renderer can draw is pickable: the ray runs from the camera's near plane to its
  * far plane (pickBlock's near/far), and a block counts only where the ray enters a front face.
+ * The opaque pit terrain hides blocks behind it, so the ray is also cut at its first terrain hit
+ * (three.js Raycaster on the terrain mesh, front faces only, like the renderer draws it).
  *
  * The pick itself is pure CPU maths (../picking.ts) on the current progress, section and ore-only
  * state, read with getState() at click time, so it needs no per-frame work and no GPU readback.
@@ -17,12 +19,13 @@ import { pickBlock } from '../picking';
 import { THROW_ARC } from '../shaders/blocks.uniforms';
 import type { SystemFactory } from '../types';
 import { packInstances, packOreFlags } from './blocksAttributes';
+import { TERRAIN_MESH_NAME } from './environment';
 
 /** CSS px a press may travel and still count as a click. */
 export const CLICK_SLOP_PX = 5;
 
 export const createPickingSystem: SystemFactory = (ctx) => {
-  const { canvas, camera, store, bag } = ctx;
+  const { canvas, camera, scene, store, bag } = ctx;
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
   let down: { id: number; x: number; y: number; dragged: boolean } | null = null;
@@ -42,7 +45,14 @@ export const createPickingSystem: SystemFactory = (ctx) => {
     // Clip distances along this (unit) ray: the near/far planes are perpendicular to the view axis.
     const cos = direction.dot(camera.getWorldDirection(forward));
     const near = cos > 1e-6 ? camera.near / cos : 0;
-    const far = cos > 1e-6 ? camera.far / cos : Infinity;
+    let far = cos > 1e-6 ? camera.far / cos : Infinity;
+    const terrain = scene.getObjectByName(TERRAIN_MESH_NAME);
+    if (terrain) {
+      raycaster.near = near;
+      raycaster.far = far;
+      const hit = raycaster.intersectObject(terrain, false)[0];
+      if (hit) far = Math.min(far, hit.distance); // blocks behind the terrain are not on screen
+    }
 
     const cutoff = s.model.grades.cutoff;
     if (!oreFor || oreFor.model !== s.model || oreFor.cutoff !== cutoff) {

@@ -7,9 +7,10 @@
  */
 import type { BlastDetail, BlastHole, BlastPattern, BlastSummary } from './api-types';
 import type { BlastConfig } from './blasts';
-import { generateBlockModel } from './blockModel';
+import { configBlockCount, generateBlockModel } from './blockModel';
+import { benchFrame } from './footprint';
 import { createRng, deriveSeed } from './rng';
-import type { BlastParameters, BlockModel, GridSpec, Vec3 } from './types';
+import type { BlastParameters, BlockModel, Vec3 } from './types';
 
 export const BLAST_DISCLAIMER = 'Synthetic data. Heuristic movement model, not physics.';
 
@@ -18,52 +19,39 @@ const SAMPLE_LOG_SIGMA = 0.15;
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
-/** Plan-axis frame for a free face: `along` points from the back wall toward the face. */
-function faceFrame(grid: GridSpec, freeFace: BlastParameters['freeFace']) {
-  const [ox, oy] = grid.origin;
-  const lx = grid.nx * grid.blockSize[0];
-  const ly = grid.ny * grid.blockSize[1];
-  switch (freeFace) {
-    case 'east':
-      return { length: lx, width: ly, toXY: (a: number, b: number): [number, number] => [ox + a, oy + b] };
-    case 'west':
-      return { length: lx, width: ly, toXY: (a: number, b: number): [number, number] => [ox + lx - a, oy + b] };
-    case 'north':
-      return { length: ly, width: lx, toXY: (a: number, b: number): [number, number] => [ox + b, oy + a] };
-    case 'south':
-      return { length: ly, width: lx, toXY: (a: number, b: number): [number, number] => [ox + b, oy + ly - a] };
+/** Per plan column (i + nx·j): tonnage-weighted mean grade of its blocks; NaN for an empty column. */
+function columnMeanGrades(model: BlockModel): Float64Array {
+  const plan = model.grid.nx * model.grid.ny;
+  const tg = new Float64Array(plan);
+  const t = new Float64Array(plan);
+  for (let n = 0; n < model.count; n++) {
+    const c = model.cell[n] % plan;
+    tg[c] += model.tonnes[n] * model.grade[n];
+    t[c] += model.tonnes[n];
   }
-}
-
-/** Tonnage-weighted mean grade of the block column containing plan point (x, y). */
-function columnMeanGrade(model: BlockModel, x: number, y: number): number {
-  const { origin, blockSize, nx, ny, nz } = model.grid;
-  const i = Math.min(nx - 1, Math.max(0, Math.floor((x - origin[0]) / blockSize[0])));
-  const j = Math.min(ny - 1, Math.max(0, Math.floor((y - origin[1]) / blockSize[1])));
-  let tg = 0;
-  let t = 0;
-  for (let k = 0; k < nz; k++) {
-    const id = i + nx * (j + ny * k);
-    tg += model.tonnes[id] * model.grade[id];
-    t += model.tonnes[id];
-  }
-  return t > 0 ? tg / t : 0;
+  const out = new Float64Array(plan);
+  for (let c = 0; c < plan; c++) out[c] = t[c] > 0 ? tg[c] / t[c] : NaN;
+  return out;
 }
 
 /**
- * Holes on the burden × spacing pattern, centred on the bench. Row 0 is nearest the free face.
- * Collar at the crest, toe at the floor minus subdrill. Deterministic per model seed.
+ * Holes on the burden × spacing pattern, centred on the grid's bounding box and kept only where
+ * the collar lies over a present block column (inside the blast outline). Row 0 is nearest the
+ * free face. Collar at the crest, toe at the floor minus subdrill. Deterministic per model seed.
  */
 export function generateHoles(model: BlockModel, pattern: BlastPattern, freeFace: BlastParameters['freeFace']): BlastHole[] {
   const { grid } = model;
-  const frame = faceFrame(grid, freeFace);
+  const frame = benchFrame(grid, freeFace);
   const zToe = grid.origin[2];
   const zCrest = zToe + grid.nz * grid.blockSize[2];
+  const [ox, oy] = grid.origin;
+  const [bx, by] = grid.blockSize;
+  const colGrade = columnMeanGrades(model);
   const rows = pattern.rows;
   const perRow = pattern.holesPerRow;
   // Centre the pattern on the bench footprint.
-  const a0 = (frame.length - rows * pattern.burden) / 2 + pattern.burden / 2;
-  const b0 = (frame.width - perRow * pattern.spacing) / 2 + pattern.spacing / 2;
+  const a0 = (frame.A - rows * pattern.burden) / 2 + pattern.burden / 2;
+  const b0 = (frame.W - perRow * pattern.spacing) / 2 + pattern.spacing / 2;
   const rng = createRng(deriveSeed(model.seed, 'holes/sample'));
   const holes: BlastHole[] = [];
   for (let r = 0; r < rows; r++) {
@@ -71,8 +59,11 @@ export function generateHoles(model: BlockModel, pattern: BlastPattern, freeFace
     const a = a0 + (rows - 1 - r) * pattern.burden;
     for (let h = 0; h < perRow; h++) {
       const b = b0 + h * pattern.spacing;
-      const [x, y] = frame.toXY(a, b);
-      const mean = columnMeanGrade(model, x, y);
+      const [x, y] = frame.toWorld(a, b);
+      const i = Math.floor((x - ox) / bx);
+      const j = Math.floor((y - oy) / by);
+      const mean = i >= 0 && i < grid.nx && j >= 0 && j < grid.ny ? colGrade[i + grid.nx * j] : NaN;
+      if (Number.isNaN(mean)) continue; // outside the blast outline: not drilled
       const sampledGrade = Math.round(mean * Math.exp(SAMPLE_LOG_SIGMA * rng.normal()) * 100) / 100;
       const collar: Vec3 = [x, y, zCrest];
       const toe: Vec3 = [x, y, zToe - pattern.subdrill];
@@ -87,7 +78,7 @@ export function buildBlastSummary(cfg: BlastConfig): BlastSummary {
     id: cfg.id,
     name: cfg.name,
     description: cfg.description,
-    blockCount: cfg.grid.nx * cfg.grid.ny * cfg.grid.nz,
+    blockCount: configBlockCount(cfg),
     benchRL: cfg.grid.origin[2],
     freeFace: cfg.freeFace,
   };

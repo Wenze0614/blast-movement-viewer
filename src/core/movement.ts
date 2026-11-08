@@ -3,16 +3,22 @@
  * stand-in for a movement engine's output that keeps the invariants a real engine promises
  * (no overlap, nothing floating, tonnes and metal conserved).
  *
- * Bench-local frame: `a` = distance from the back wall toward the free face (throw = +a),
- * `b` = lateral distance, A = bench length along the throw, W = bench width, H = bench height.
+ * Bench-local frame (footprint.ts): `a` = distance from the back of the grid's bounding box toward
+ * the free face (throw = +a), `b` = lateral distance, H = bench height. The blast outline is
+ * irregular, so the free face is per lateral strip: face(b) = front of that strip's blocks.
  *
- * 1. Target plan displacement per block (s = u/U, 0 = front row; h = 0 toe … 1 crest):
+ * 1. Target plan displacement per block (s = (face(b) − a)/D, 0 at the face … 1 at the back,
+ *    D = footprint depth; h = 0 toe … 1 crest; b̂ = lateral position in the footprint, −1 … 1):
  *      T = T_max · [r_back + (1 − r_back)(1 − s)^p] · [r_toe + (1 − r_toe)·h] · (1 + 0.25·R·n₁)
- *      L = R·σ_lat·n₂ + fan·((b − W/2)/(W/2))·(1 − s)
+ *      L = R·σ_lat·n₂ + fan·b̂·(1 − s)
  *    n₁, n₂ = seeded 3D simplex noise at centroid / noiseLength.
- * 2. Swell + re-grid: k = swell^(1/3); post-blast plan grid of cell c′ = c·k from the back wall
- *    to past the throw; bin each target. Behind the face line targets are clamped inside the
- *    bench sides (confined by unblasted rock).
+ * 2. Swell + re-grid: k = swell^(1/3); post-blast plan grid of cell c′ = c·k from the back of the
+ *    box to past the throw; bin each target. Rock can only land on free ground: inside the blast
+ *    footprint or on the (bounded) open floor in front of the face. A cell is valid only if the
+ *    WHOLE swollen block footprint (the cell square) is free, and a block may take a cell only if
+ *    its animated box stays over free ground (within the terrain's floor margin) all the way
+ *    there (footprint.pathIsFree), so no block meets rock or the pit terrain, settled or in
+ *    flight. Otherwise it takes the nearest such cell to its target (then to its own position).
  * 3. Stacking: per cell, sort by original z (ties: front first), z_n = z_toe + (n + ½)·H_b·k.
  * 4. Angle-of-repose relaxation: move the top block of the tallest offending cell to its lowest
  *    valid neighbour until stable or 20·N moves (see `allowedDrop` for the lattice criterion).
@@ -23,14 +29,16 @@
  */
 import type { NoiseFunction3D } from 'simplex-noise';
 import { canonicalParams, hashParams } from './hash';
+import { floorMargin, modelFootprint } from './footprint';
 import { createSeededNoise3D, deriveSeed } from './rng';
-import type { BlastParameters, BlockModel, GridSpec, Heightfield, MovementResult, Vec2 } from './types';
+import type { BlastParameters, BlockModel, GridSpec, Heightfield, MovementResult } from './types';
 
 /**
  * Version of this movement heuristic. Bump it whenever a code change alters `computeMovement`
  * output for the same model + params, so immutable cached responses keyed on paramsHash expire.
+ * v2: irregular footprints (per-strip free face, rock confined by the unblasted ground).
  */
-export const MOVEMENT_MODEL_VERSION = 1;
+export const MOVEMENT_MODEL_VERSION = 2;
 
 /** ADR-3 step 4: stop after 20·N block moves even if not fully relaxed. */
 export const RELAXATION_MOVE_FACTOR = 20;
@@ -44,13 +52,21 @@ export interface MovementStats {
   relaxationMoves: number;
   /** false if the 20·N move cap stopped the relaxation. */
   converged: boolean;
-  /** Post-grid cells blocks may occupy (1) vs unblasted side walls behind the face (0); world index. */
+  /** Post-grid cells blocks may occupy (1) vs unblasted rock (0); world index. */
   validMask: Uint8Array;
   /** Blocks per post-grid cell; world index ix + nx·iy. */
   stackCount: Uint16Array;
   /** m, stacked block height H_b·k. */
   stackHeight: number;
+  /**
+   * Blocks whose destination could not be reached by a free path (outline too thin for a swollen
+   * block to pass); they keep the nearest valid cell. 0 for the demo blasts at any parameters.
+   */
+  pathFallbacks: number;
 }
+
+/** Cells (Chebyshev) searched around a blocked target for a reachable destination. */
+export const REACH_SEARCH_CELLS = 10;
 
 /**
  * Max allowed stack-height drop, in blocks, over a baseline of `d` cells along a grid axis.
@@ -63,53 +79,6 @@ export interface MovementStats {
  */
 export function allowedDrop(d: number, reposeAngleDeg: number, cellSize: number, stackHeight: number): number {
   return Math.max(1, Math.round((d * Math.tan(reposeAngleDeg * DEG) * cellSize) / stackHeight));
-}
-
-/** Bench-local frame for a free face. */
-interface Frame {
-  /** m, bench length along the throw and width across it */
-  A: number;
-  W: number;
-  /** block size along / across the throw */
-  ca: number;
-  cb: number;
-  nAlong: number;
-  nLat: number;
-  toLocal(x: number, y: number): Vec2;
-  toWorld(a: number, b: number): Vec2;
-}
-
-function benchFrame(grid: GridSpec, face: BlastParameters['freeFace']): Frame {
-  const [ox, oy] = grid.origin;
-  const [bx, by] = grid.blockSize;
-  const lx = grid.nx * bx;
-  const ly = grid.ny * by;
-  switch (face) {
-    case 'east':
-      return {
-        A: lx, W: ly, ca: bx, cb: by, nAlong: grid.nx, nLat: grid.ny,
-        toLocal: (x, y) => [x - ox, y - oy],
-        toWorld: (a, b) => [ox + a, oy + b],
-      };
-    case 'west':
-      return {
-        A: lx, W: ly, ca: bx, cb: by, nAlong: grid.nx, nLat: grid.ny,
-        toLocal: (x, y) => [ox + lx - x, y - oy],
-        toWorld: (a, b) => [ox + lx - a, oy + b],
-      };
-    case 'north':
-      return {
-        A: ly, W: lx, ca: by, cb: bx, nAlong: grid.ny, nLat: grid.nx,
-        toLocal: (x, y) => [y - oy, x - ox],
-        toWorld: (a, b) => [ox + b, oy + a],
-      };
-    case 'south':
-      return {
-        A: ly, W: lx, ca: by, cb: bx, nAlong: grid.ny, nLat: grid.nx,
-        toLocal: (x, y) => [oy + ly - y, x - ox],
-        toWorld: (a, b) => [ox + b, oy + ly - a],
-      };
-  }
 }
 
 function assertParams(p: BlastParameters): void {
@@ -175,8 +144,12 @@ export function computeMovementDetailed(
   const params = canonicalParams(rawParams);
   assertParams(params);
   const { grid, count: N } = model;
-  const frame = benchFrame(grid, params.freeFace);
-  const { A, W, ca, cb, nAlong, nLat } = frame;
+  const fp = modelFootprint(model, params.freeFace);
+  const frame = fp.frame;
+  const { W, ca, cb, nAlong, nLat } = frame;
+  const depth = Math.max(fp.frontMax - fp.backMin, ca); // D: footprint length along the throw
+  const latCentre = (fp.latMin + fp.latMax) / 2;
+  const latHalf = Math.max((fp.latMax - fp.latMin) / 2, cb);
   const zToe = grid.origin[2];
   const H = grid.nz * grid.blockSize[2];
 
@@ -189,19 +162,18 @@ export function computeMovementDetailed(
   const reach = (2 * H * params.swellFactor) / tanPhi; // generous room for the relaxed toe
   const frontMargin = Math.ceil((params.maxThrow * (1 + 0.25 * R) + reach) / cell) + 2;
   const mLat = Math.ceil((params.lateralFan + 3 * params.lateralSigma * R + reach) / cell) + 2;
-  const nA = Math.ceil(A / cell) + frontMargin;
+  const nA = Math.ceil(fp.frontMax / cell) + frontMargin;
   const nB = Math.ceil(W / cell) + 2 * mLat;
   const nCells = nA * nB;
-  const jLo = mLat;
-  const jHi = mLat + Math.ceil(W / cell) - 1;
   const lc = (ia: number, ib: number) => ia + nA * ib; // local cell index
 
-  // Behind the face line, only the bench footprint is open; the sides are unblasted rock.
+  // A cell is valid when its whole square (the swollen block's plan footprint) is free ground.
+  // Every row ib in the footprint's lateral range has valid cells: the open floor in front of the
+  // frontmost face is FLOOR_WIDTH ≫ c′ deep and SIDE_OPEN ≫ c′ wider than the footprint.
   const valid = new Uint8Array(nCells);
   for (let ib = 0; ib < nB; ib++) {
-    for (let ia = 0; ia < nA; ia++) {
-      valid[lc(ia, ib)] = (ia + 0.5) * cell >= A || (ib >= jLo && ib <= jHi) ? 1 : 0;
-    }
+    const b0 = (ib - mLat) * cell;
+    for (let ia = 0; ia < nA; ia++) valid[lc(ia, ib)] = fp.boxIsFree(ia * cell, b0, cell) ? 1 : 0;
   }
 
   // ── Step 1: target plan displacement, binning, delay ────────────────────
@@ -212,8 +184,43 @@ export function computeMovementDetailed(
   const rb = params.backRowRatio;
   const rt = params.toeRatio;
 
+  // A block's animated box: half-extents (ca, cb)/2 growing by k, centre from its start to the cell
+  // centre. It must stay within the terrain's floor margin of free ground (see pathIsFree).
+  const tol = floorMargin(grid);
+  const startA = new Float64Array(N);
+  const startB = new Float64Array(N);
+  const reachable = (n: number, cl: number): boolean => {
+    const ia = cl % nA;
+    const ib = (cl - ia) / nA;
+    return fp.pathIsFree(startA[n], startB[n], (ia + 0.5) * cell, (ib - mLat + 0.5) * cell, ca / 2, cb / 2, k, tol);
+  };
+  /** Nearest valid, reachable cell to (ia, ib) within REACH_SEARCH_CELLS, or -1. Deterministic. */
+  const nearestReachable = (n: number, ia: number, ib: number): number => {
+    for (let r = 0; r <= REACH_SEARCH_CELLS; r++) {
+      let best = -1;
+      let bestD = Infinity;
+      for (let jb = ib - r; jb <= ib + r; jb++) {
+        if (jb < 0 || jb >= nB) continue;
+        for (let ja = ia - r; ja <= ia + r; ja++) {
+          if (ja < 0 || ja >= nA || Math.max(Math.abs(ja - ia), Math.abs(jb - ib)) !== r) continue;
+          const cl = lc(ja, jb);
+          const d = (ja - ia) ** 2 + (jb - ib) ** 2;
+          if (d < bestD && valid[cl] && reachable(n, cl)) {
+            best = cl;
+            bestD = d;
+          }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return -1;
+  };
+  let pathFallbacks = 0;
+
   const cellOf = new Int32Array(N);
-  const rank = new Int32Array(N); // unique per block: (flitch, row from front, lateral index)
+  // Unique per block: (flitch, row from front, lateral index) over the dense bounding grid.
+  const gridCount = nAlong * nLat * grid.nz;
+  const rank = new Int32Array(N);
   const delay = new Float32Array(N);
   const c = model.centroid;
   const aMax = nA * cell - 1e-6;
@@ -225,7 +232,9 @@ export function computeMovementDetailed(
     const y = c[3 * n + 1];
     const z = c[3 * n + 2];
     const [a, b] = frame.toLocal(x, y);
-    const s = (A - a) / A; // 0 at the free face, 1 at the back wall
+    startA[n] = a;
+    startB[n] = b;
+    const s = Math.min(1, Math.max(0, (fp.faceLine(b) - a) / depth)); // 0 at the face, 1 at the back
     const h = (z - zToe) / H;
     const qx = x / len; // noise-space coordinates
     const qy = y / len;
@@ -237,15 +246,38 @@ export function computeMovementDetailed(
       (rb + (1 - rb) * Math.pow(1 - s, params.throwExponent)) *
       (rt + (1 - rt) * h) *
       (1 + 0.25 * R * n1);
-    const L = R * params.lateralSigma * n2 + params.lateralFan * ((b - W / 2) / (W / 2)) * (1 - s);
+    const L = R * params.lateralSigma * n2 + params.lateralFan * ((b - latCentre) / latHalf) * (1 - s);
 
-    const ta = Math.min(aMax, Math.max(0, a + T)); // never behind the back wall
-    let tb = b + L;
-    if (ta < A) tb = Math.min(W - 1e-6, Math.max(0, tb)); // confined sides behind the face
-    tb = Math.min(bMax, Math.max(bMin, tb));
-    const ia = Math.floor(ta / cell);
+    const ta = Math.min(aMax, Math.max(0, a + T)); // never behind the back of the box
+    const tb = Math.min(bMax, Math.max(bMin, b + L));
+    let ia = Math.floor(ta / cell);
     let ib = Math.floor(tb / cell) + mLat;
-    if (!valid[lc(ia, ib)]) ib = Math.min(jHi, Math.max(jLo, ib));
+    const wanted = lc(ia, ib);
+    if (!valid[wanted] || !reachable(n, wanted)) {
+      // Blocked: the nearest reachable cell to the target, else to the block's own position.
+      let pick = nearestReachable(n, ia, ib);
+      if (pick < 0) pick = nearestReachable(n, Math.min(nA - 1, Math.floor(a / cell)), Math.min(nB - 1, Math.max(0, Math.floor(b / cell) + mLat)));
+      if (pick >= 0) {
+        ia = pick % nA;
+        ib = (pick - ia) / nA;
+      }
+    }
+    if (!valid[lc(ia, ib)]) {
+      // Target not on free ground: slide back toward the block's own strip, then along the throw,
+      // forward first (its face and the open floor are ahead), else back (past the open floor).
+      const ib0 = Math.min(nB - 1, Math.max(0, Math.floor(b / cell) + mLat));
+      const step = Math.sign(ib0 - ib);
+      while (ib !== ib0 && !valid[lc(ia, ib)]) ib += step;
+      let ja = ia;
+      while (ja < nA - 1 && !valid[lc(ja, ib)]) ja++;
+      if (!valid[lc(ja, ib)]) {
+        ja = ia;
+        while (ja > 0 && !valid[lc(ja, ib)]) ja--;
+      }
+      if (!valid[lc(ja, ib)]) throw new Error(`computeMovement: no free ground in post-grid row ${ib}`);
+      ia = ja;
+    }
+    if (!reachable(n, lc(ia, ib))) pathFallbacks++;
     cellOf[n] = lc(ia, ib);
 
     // rank: lower flitch first, then front row first, then lateral index
@@ -261,9 +293,9 @@ export function computeMovementDetailed(
 
   // ── Step 3: stacking — sort by (cell, rank) ─────────────────────────────
   const keys = new Float64Array(N);
-  const rankToId = new Int32Array(N);
+  const rankToId = new Int32Array(gridCount);
   for (let n = 0; n < N; n++) {
-    keys[n] = cellOf[n] * N + rank[n];
+    keys[n] = cellOf[n] * gridCount + rank[n]; // < nCells · gridCount, exact in a double
     rankToId[rank[n]] = n;
   }
   keys.sort();
@@ -271,8 +303,8 @@ export function computeMovementDetailed(
   for (let i = 0; i < nCells; i++) stacks[i] = [];
   for (let q = 0; q < N; q++) {
     const key = keys[q];
-    const cl = Math.floor(key / N);
-    stacks[cl].push(rankToId[key - cl * N]);
+    const cl = Math.floor(key / gridCount);
+    stacks[cl].push(rankToId[key - cl * gridCount]);
   }
 
   // ── Step 4: angle-of-repose relaxation ──────────────────────────────────
@@ -291,12 +323,24 @@ export function computeMovementDetailed(
   const pushCell = (cl: number) => heap.push(height[cl] * nCells + (nCells - 1 - cl));
   for (let cl = 0; cl < nCells; cl++) if (valid[cl] && height[cl] >= 2) pushCell(cl);
 
+  /**
+   * The cell the stack in `cl` should shed a block to, or -1. Sets `moverIdx` to the stack index of
+   * the block that moves: the highest one with a free path there (usually the top one; final
+   * stacks are re-sorted by original elevation, so which block moves never breaks vertical order).
+   */
+  let moverIdx = -1;
+  const highestReachable = (cl: number, target: number): number => {
+    const st = stacks[cl];
+    for (let i = st.length - 1; i >= 0; i--) if (reachable(st[i], target)) return i;
+    return -1;
+  };
   const findTarget = (cl: number): number => {
     const hgt = height[cl];
     if (hgt < 2) return -1;
     const ia = cl % nA;
     const ib = (cl - ia) / nA;
     let best = -1;
+    let bestIdx = -1;
     let bestH = Infinity;
     let bestD = Infinity;
     for (const [da, db] of DIRS) {
@@ -308,12 +352,16 @@ export function computeMovementDetailed(
         if (!valid[nb]) break; // can't see past a wall
         const hn = height[nb];
         if (hgt - hn > allowed[d] && (hn < bestH || (hn === bestH && d < bestD))) {
+          const idx = highestReachable(cl, nb);
+          if (idx < 0) continue;
           best = nb;
+          bestIdx = idx;
           bestH = hn;
           bestD = d;
         }
       }
     }
+    moverIdx = bestIdx;
     return best;
   };
 
@@ -326,7 +374,7 @@ export function computeMovementDetailed(
     if (height[cl] !== hgt) continue; // stale entry
     const target = findTarget(cl);
     if (target < 0) continue;
-    stacks[target].push(stacks[cl].pop() as number);
+    stacks[target].push(stacks[cl].splice(moverIdx, 1)[0]);
     height[cl]--;
     height[target]++;
     moves++;
@@ -406,7 +454,7 @@ export function computeMovementDetailed(
   };
   return {
     result,
-    stats: { relaxationMoves: moves, converged, validMask, stackCount, stackHeight: hb },
+    stats: { relaxationMoves: moves, converged, validMask, stackCount, stackHeight: hb, pathFallbacks },
   };
 }
 

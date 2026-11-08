@@ -5,8 +5,9 @@
  *
  * P4 plan view: `store.cameraView` switches between the 3D pose and a top-down, north-up pose
  * that fits the bench plus the muckpile. The switch eases over CAMERA_TWEEN_S, driven by dt
- * (input is paused meanwhile). In plan view rotation is locked and a left drag pans; going back
- * to 3D restores the 3D pose the user left (until a new blast reframes).
+ * (input is paused, pending orbit inertia flushed). In plan view rotation is locked and a left
+ * drag pans; going back to 3D restores the 3D pose the user left (until a new blast reframes).
+ * A plan view fitted before the movement arrived refits once when it does.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -74,17 +75,47 @@ export const createControlsSystem: SystemFactory = (ctx) => {
 
   let moving = false;
   let framedFor: string | null = null;
-  /** Active 3D ↔ plan ease, or null. */
-  let tween: { from: CameraPose; to: CameraPose; t: number } | null = null;
-  /** The 3D pose saved when switching to plan; restored on the way back. */
+  /** Active 3D ↔ plan ease (toward `view`), or null. */
+  let tween: { from: CameraPose; to: CameraPose; t: number; view: AppState['cameraView'] } | null = null;
+  /**
+   * The 3D pose saved on leaving 3D; restored on the way back. Kept until a return to 3D
+   * COMPLETES, so reversing mid-ease (plan → 3D → plan → 3D) still lands on it.
+   */
   let saved3d: CameraPose | null = null;
+  /**
+   * The current plan pose was fitted before the movement existed (model first, movement later):
+   * refit once when it arrives, so the muckpile is in view. Param changes never reframe.
+   */
+  let planAwaitsMovement = false;
 
+  const planPose = (model: BlockModel): CameraPose => {
+    const movement = store.getState().movement;
+    planAwaitsMovement = movement === null;
+    return planFramingFor(model, movement, camera.fov, camera.aspect);
+  };
   const poseFor = (view: AppState['cameraView'], model: BlockModel): CameraPose =>
-    view === 'plan' ? planFramingFor(model, store.getState().movement, camera.fov, camera.aspect) : framingFor(model);
+    view === 'plan' ? planPose(model) : framingFor(model);
+
+  const currentPose = (): CameraPose => ({ target: controls.target.clone(), position: camera.position.clone() });
 
   const applyPose = ({ target, position }: CameraPose) => {
     controls.target.copy(target);
     camera.position.copy(position);
+  };
+
+  /**
+   * Drop OrbitControls' pending damping (orbit/pan/zoom inertia) without moving the camera: an
+   * undamped update applies and zeroes the deltas, then the pose is put back. Otherwise the
+   * inertia keeps acting during and after an ease and the plan view ends up tilted or rotated.
+   */
+  const flushInertia = () => {
+    const pose = currentPose();
+    const damping = controls.enableDamping;
+    controls.enableDamping = false;
+    controls.update();
+    controls.enableDamping = damping;
+    applyPose(pose);
+    controls.update();
   };
 
   const applyViewMode = (view: AppState['cameraView']) => {
@@ -100,13 +131,23 @@ export const createControlsSystem: SystemFactory = (ctx) => {
     camera.updateProjectionMatrix();
   };
 
+  const easeTo = (to: CameraPose, view: AppState['cameraView']) => {
+    flushInertia();
+    fitClipping(to);
+    tween = { from: currentPose(), to, t: 0, view };
+    controls.enabled = false; // no orbit/pan fighting the ease
+    ctx.invalidate();
+  };
+
   const frame = (model: BlockModel | null) => {
     if (!model || model.configHash === framedFor) return;
     framedFor = model.configHash;
     tween = null;
     saved3d = null;
+    planAwaitsMovement = false;
     controls.enabled = true;
     const view = store.getState().cameraView;
+    flushInertia();
     const pose = poseFor(view, model);
     camera.far = 0; // re-derive for this bench
     fitClipping(pose);
@@ -120,19 +161,32 @@ export const createControlsSystem: SystemFactory = (ctx) => {
     const { model } = store.getState();
     applyViewMode(view);
     if (!model) return;
-    const from: CameraPose = { target: controls.target.clone(), position: camera.position.clone() };
-    // Leaving 3D (not mid-ease back from plan): remember where the user was.
-    if (view === 'plan' && !tween) saved3d = from;
-    const to = view === '3d' && saved3d ? saved3d : poseFor(view, model);
-    if (view === '3d') saved3d = null;
-    fitClipping(to);
-    tween = { from, to, t: 0 };
-    controls.enabled = false; // no orbit/pan fighting the ease
-    ctx.invalidate();
+    if (view === 'plan') {
+      // Leaving a settled 3D view: remember it. Mid-ease back to 3D, the pose is still saved.
+      if (!saved3d && !tween) saved3d = currentPose();
+      easeTo(planPose(model), 'plan');
+    } else {
+      planAwaitsMovement = false;
+      easeTo(saved3d ?? framingFor(model), '3d');
+    }
+  };
+
+  const onMovement = (movement: MovementResult | null) => {
+    const { model, cameraView } = store.getState();
+    if (!movement || !model || cameraView !== 'plan' || !planAwaitsMovement) return;
+    const to = planPose(model);
+    if (tween && tween.view === 'plan') {
+      fitClipping(to);
+      tween.to = to; // retarget the running ease
+      ctx.invalidate();
+    } else {
+      easeTo(to, 'plan');
+    }
   };
 
   bag.track(store.subscribe((s) => s.model, frame));
   bag.track(store.subscribe((s) => s.cameraView, switchView));
+  bag.track(store.subscribe((s) => s.movement, onMovement));
 
   return {
     name: 'controls',
@@ -151,6 +205,7 @@ export const createControlsSystem: SystemFactory = (ctx) => {
         controls.target.lerpVectors(tween.from.target, tween.to.target, k);
         camera.position.lerpVectors(tween.from.position, tween.to.position, k);
         if (tween.t >= 1) {
+          if (tween.view === '3d') saved3d = null; // back where the user was
           tween = null;
           controls.enabled = true;
         }

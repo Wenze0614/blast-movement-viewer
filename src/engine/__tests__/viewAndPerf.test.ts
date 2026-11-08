@@ -17,6 +17,8 @@ const data = new LocalDataSource();
 const model = await data.getModel('b1040-017');
 const movement = await data.getMovement('b1040-017', (await data.getBlast('b1040-017')).defaultParams);
 const other = await data.getModel('b1030-022');
+const otherDetail = await data.getBlast('b1030-022');
+const otherMovement = await data.getMovement('b1030-022', otherDetail.defaultParams);
 
 function mockCtx(store: AppStore = createAppStore(), renderer: unknown = {}): EngineContext {
   THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -157,6 +159,109 @@ describe('controls system: 3D ↔ plan (P4)', () => {
     ctx.store.getState().setCameraView('3d');
     runUntilIdle(system);
     expect(near(ctx.camera.position, framingFor(other).position, 1e-3)).toBe(true);
+    ctx.bag.disposeAll();
+  });
+
+  /** The OrbitControls instance, captured through the bag (it is private to the system). */
+  function setupWithControls(opts: { movement: boolean }) {
+    const ctx = mockCtx();
+    const tracked: unknown[] = [];
+    const track = ctx.bag.track.bind(ctx.bag);
+    ctx.bag.track = ((r: unknown) => (tracked.push(r), track(r as never))) as typeof ctx.bag.track;
+    const system = createControlsSystem(ctx, {});
+    void system.init?.();
+    ctx.store.getState().setModel(model, 'local');
+    if (opts.movement) ctx.store.getState().setMovement(movement, 'local');
+    const controls = tracked.find((r) => (r as { enableRotate?: boolean }).enableRotate !== undefined) as {
+      _sphericalDelta: THREE.Spherical;
+      _panOffset: THREE.Vector3;
+      enabled: boolean;
+    };
+    return { ctx, system, controls };
+  }
+
+  it('codex r1: a plan view fitted before the movement refits once it arrives (saved 3D pose kept)', () => {
+    const { ctx, system } = setupWithControls({ movement: false });
+    runUntilIdle(system);
+    ctx.camera.position.set(10, -40, 1080);
+    const userPos = ctx.camera.position.clone();
+    ctx.store.getState().setCameraView('plan');
+    for (let i = 0; i < 3; i++) system.update?.({ dt: 1 / 60, elapsed: 0, frame: i }); // mid-ease
+    ctx.store.getState().setMovement(movement, 'local');
+    runUntilIdle(system);
+    const withMuckpile = planFramingFor(model, movement, ctx.camera.fov, ctx.camera.aspect);
+    expect(near(ctx.camera.position, withMuckpile.position, 1e-6)).toBe(true);
+    ctx.store.getState().setCameraView('3d');
+    runUntilIdle(system);
+    expect(near(ctx.camera.position, userPos, 1e-3)).toBe(true);
+    ctx.bag.disposeAll();
+  });
+
+  it('codex r1: a settled plan view of a new blast refits when its movement arrives', () => {
+    const { ctx, system } = setupWithControls({ movement: true });
+    ctx.store.getState().setCameraView('plan');
+    runUntilIdle(system);
+    ctx.store.getState().setBlastId('b1030-022');
+    ctx.store.getState().setModel(other, 'local'); // model first …
+    runUntilIdle(system);
+    ctx.store.getState().setMovement(otherMovement, 'local'); // … movement later
+    expect(system.isAnimating?.()).toBe(true);
+    runUntilIdle(system);
+    const fitted = planFramingFor(other, otherMovement, ctx.camera.fov, ctx.camera.aspect);
+    expect(near(ctx.camera.position, fitted.position, 1e-6)).toBe(true);
+    ctx.bag.disposeAll();
+  });
+
+  it('a parameter change (new movement for the same model) never reframes the plan view', () => {
+    const { ctx, system } = setupWithControls({ movement: true });
+    ctx.store.getState().setCameraView('plan');
+    runUntilIdle(system);
+    ctx.camera.position.x += 7; // the user panned
+    const panned = ctx.camera.position.clone();
+    ctx.store.getState().setParams({ maxThrow: 14 }); // clears the movement …
+    ctx.store.getState().setMovement(movement, 'local'); // … and a new one lands
+    expect(system.isAnimating?.()).toBe(false);
+    expect(near(ctx.camera.position, panned, 1e-9)).toBe(true);
+    ctx.bag.disposeAll();
+  });
+
+  it.each([1 / 20, 1 / 60, 1 / 144])(
+    'codex r1: pending orbit/pan inertia never bends the plan pose (dt = %s)',
+    (dt) => {
+      const { ctx, system, controls } = setupWithControls({ movement: true });
+      runUntilIdle(system);
+      // The user flung the camera just before pressing Plan.
+      controls._sphericalDelta.theta = 0.4;
+      controls._sphericalDelta.phi = 0.15;
+      controls._panOffset.set(6, -3, 1);
+      ctx.store.getState().setCameraView('plan');
+      runUntilIdle(system, dt);
+      const plan = planFramingFor(model, movement, ctx.camera.fov, ctx.camera.aspect);
+      expect(near(ctx.camera.position, plan.position, 1e-6)).toBe(true);
+      // North stays up: the camera's screen-up points +y.
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(ctx.camera.quaternion);
+      expect(up.y).toBeGreaterThan(0.999);
+      // And nothing drifts afterwards.
+      for (let i = 0; i < 30; i++) system.update?.({ dt, elapsed: 0, frame: i });
+      expect(near(ctx.camera.position, plan.position, 1e-6)).toBe(true);
+      ctx.bag.disposeAll();
+    },
+  );
+
+  it('codex r1: plan → partial return to 3D → plan → completed return lands on the saved 3D pose', () => {
+    const { ctx, system } = setupWithControls({ movement: true });
+    runUntilIdle(system);
+    ctx.camera.position.set(10, -40, 1080);
+    const userPos = ctx.camera.position.clone();
+    ctx.store.getState().setCameraView('plan');
+    runUntilIdle(system);
+    ctx.store.getState().setCameraView('3d');
+    for (let i = 0; i < 10; i++) system.update?.({ dt: 1 / 60, elapsed: 0, frame: i }); // partial
+    ctx.store.getState().setCameraView('plan');
+    for (let i = 0; i < 10; i++) system.update?.({ dt: 1 / 60, elapsed: 0, frame: i }); // partial again
+    ctx.store.getState().setCameraView('3d');
+    runUntilIdle(system);
+    expect(near(ctx.camera.position, userPos, 1e-3)).toBe(true);
     ctx.bag.disposeAll();
   });
 

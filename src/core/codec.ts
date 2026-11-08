@@ -255,6 +255,64 @@ function views(buffer: ArrayBuffer, base: number, header: Bmv1Header, expect: Re
   return out;
 }
 
+// ── Header shape checks: a header that is valid JSON but malformed throws BAD_HEADER, never a
+// TypeError from deep inside decode.
+
+const bad = (msg: string): never => {
+  throw new CodecError('BAD_HEADER', msg);
+};
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isUint = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
+
+function obj(v: unknown, path: string): Record<string, unknown> {
+  return isObj(v) ? v : bad(`${path} must be an object`);
+}
+function num(v: unknown, path: string): void {
+  if (!isNum(v)) bad(`${path} must be a finite number`);
+}
+function uint(v: unknown, path: string): void {
+  if (!isUint(v)) bad(`${path} must be an integer >= 0`);
+}
+function str(v: unknown, path: string): void {
+  if (typeof v !== 'string' || v.length === 0) bad(`${path} must be a non-empty string`);
+}
+function vec(v: unknown, n: number, path: string): void {
+  if (!Array.isArray(v) || v.length !== n || !v.every(isNum)) bad(`${path} must be ${n} finite numbers`);
+}
+/** `{ origin: Vec2, cellSize, nx, ny }` (postGrid, surface). */
+function grid2(v: unknown, path: string): void {
+  const g = obj(v, path);
+  vec(g.origin, 2, `${path}.origin`);
+  num(g.cellSize, `${path}.cellSize`);
+  uint(g.nx, `${path}.nx`);
+  uint(g.ny, `${path}.ny`);
+}
+
+function checkModelHeader(h: ModelHeader): void {
+  const g = obj(h.grid, 'grid');
+  vec(g.origin, 3, 'grid.origin');
+  vec(g.blockSize, 3, 'grid.blockSize');
+  uint(g.nx, 'grid.nx');
+  uint(g.ny, 'grid.ny');
+  uint(g.nz, 'grid.nz');
+  if ((g.nx as number) * (g.ny as number) * (g.nz as number) !== h.count) bad('grid.nx * ny * nz must equal count');
+  const gr = obj(h.grades, 'grades');
+  num(gr.cutoff, 'grades.cutoff');
+  num(gr.highGrade, 'grades.highGrade');
+  num(h.seed, 'seed');
+  str(h.configHash, 'configHash');
+}
+
+function checkMovementHeader(h: MovementHeader): void {
+  obj(h.params, 'params');
+  str(h.paramsHash, 'paramsHash');
+  str(h.modelConfigHash, 'modelConfigHash');
+  num(h.looseScale, 'looseScale');
+  grid2(h.postGrid, 'postGrid');
+  grid2(h.surface, 'surface');
+}
+
 function begin(input: Input, kind: Bmv1Header['kind']) {
   assertLittleEndian();
   const { buffer, base, byteLength } = toAligned(input);
@@ -267,10 +325,8 @@ function begin(input: Input, kind: Bmv1Header['kind']) {
 export function decodeModel(input: Input): BlockModel {
   const { buffer, base, header: h } = begin(input, 'model');
   const header = h as ModelHeader;
+  checkModelHeader(header);
   const n = header.count;
-  if (typeof header.configHash !== 'string' || header.configHash.length === 0) {
-    throw new CodecError('BAD_HEADER', 'model header has no configHash');
-  }
   const v = views(buffer, base, header, {
     centroid: ['f32', 3 * n],
     grade: ['f32', n],
@@ -302,6 +358,7 @@ export function decodeModel(input: Input): BlockModel {
 export function decodeMovement(input: Input, model: BlockModel): MovementResult {
   const { buffer, base, header: h } = begin(input, 'movement');
   const header = h as MovementHeader;
+  checkMovementHeader(header);
   if (header.modelConfigHash !== model.configHash || header.count !== model.count) {
     throw new CodecError(
       'MODEL_MISMATCH',

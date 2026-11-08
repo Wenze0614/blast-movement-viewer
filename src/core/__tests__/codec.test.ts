@@ -195,6 +195,40 @@ describe('BMV1 codec: typed errors', () => {
     expectThrowsCode(() => decodeMovement(model, small.model), 'WRONG_KIND');
   });
 
+  /** The payload with its header JSON edited in place (still valid JSON, same header length). */
+  function withHeader(buf: Uint8Array, edit: (h: Record<string, unknown>) => void): Uint8Array {
+    const hLen = new DataView(buf.buffer, buf.byteOffset).getUint32(4, true);
+    const header = JSON.parse(new TextDecoder().decode(buf.subarray(8, 8 + hLen))) as Record<string, unknown>;
+    edit(header);
+    const json = new TextEncoder().encode(JSON.stringify(header));
+    if (json.length > hLen) throw new Error('edited header grew past its padding');
+    const out = buf.slice();
+    out.fill(0x20, 8, 8 + hLen);
+    out.set(json, 8);
+    return out;
+  }
+
+  type Edit = (h: Record<string, unknown>) => void;
+  const sub = (h: Record<string, unknown>, k: string) => h[k] as Record<string, unknown>;
+  const malformed: [string, 'model' | 'movement', Edit][] = [
+    ['model grid missing', 'model', (h) => delete h.grid],
+    ['model grid.origin not a Vec3', 'model', (h) => (sub(h, 'grid').origin = [0, 0])],
+    ['model grid dims disagree with count', 'model', (h) => (sub(h, 'grid').nz = 1)],
+    ['model grades null', 'model', (h) => (h.grades = null)],
+    ['model configHash empty', 'model', (h) => (h.configHash = '')],
+    ['movement surface missing', 'movement', (h) => delete h.surface],
+    ['movement postGrid a string', 'movement', (h) => (h.postGrid = 'x')],
+    ['movement surface.nx negative', 'movement', (h) => (sub(h, 'surface').nx = -1)],
+    ['movement params missing', 'movement', (h) => delete h.params],
+    ['movement looseScale a string', 'movement', (h) => (h.looseScale = '1')],
+  ];
+
+  it.each(malformed)('malformed but valid-JSON header (%s) → BAD_HEADER, not a TypeError', (_name, kind, edit) => {
+    const buf = kind === 'model' ? encodeModel(small.model) : encodeMovement(small.movement, small.model.configHash);
+    const broken = withHeader(buf, edit);
+    expectThrowsCode(() => (kind === 'model' ? decodeModel(broken) : decodeMovement(broken, small.model)), 'BAD_HEADER');
+  });
+
   it('a movement decoded against a different model → MODEL_MISMATCH', () => {
     const payload = encodeMovement(small.movement, small.model.configHash);
     expectThrowsCode(() => decodeMovement(payload, fixtures[1].model), 'MODEL_MISMATCH');

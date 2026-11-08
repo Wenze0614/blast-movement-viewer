@@ -4,6 +4,11 @@
  * a click hits what is on screen at any scrub position. Blocks the shader discards (section plane,
  * ore-only) are skipped, so a click through a cut face hits the block behind it.
  *
+ * Renderer-consistent: the block material culls back faces, so a block is hit only where the ray
+ * ENTERS it through a front face, and only between the camera's near and far planes. A ray that
+ * starts inside a block (camera zoomed into the bench) or whose entry is near-clipped skips that
+ * block, exactly as the image shows nothing of it.
+ *
  * Pure maths, no three.js objects: O(N) slab tests, about 1 ms at 30k blocks, run once per click.
  */
 import { animatedCentroid, animatedScale, blockProgress } from '@/core/easing';
@@ -11,8 +16,12 @@ import { animatedCentroid, animatedScale, blockProgress } from '@/core/easing';
 export interface PickRay {
   /** m, world (mine grid) */
   origin: readonly [number, number, number];
-  /** Need not be normalised; hit distances are in units of |direction|. */
+  /** Need not be normalised; hit distances (and near/far) are in units of |direction|. */
   direction: readonly [number, number, number];
+  /** Entries closer than this are clipped (camera near plane along the ray). Default 0. */
+  near?: number;
+  /** Entries farther than this are clipped (camera far plane along the ray). Default ∞. */
+  far?: number;
 }
 
 export interface PickScene {
@@ -57,10 +66,12 @@ function clipSlab(o: number, d: number, min: number, max: number, span: [number,
   return span[0] <= span[1];
 }
 
-/** Nearest visible block the ray enters (or starts inside), or null. */
+/** Nearest visible block whose front face the ray enters within [near, far], or null. */
 export function pickBlock(ray: PickRay, s: PickScene): number | null {
   const [ox, oy, oz] = ray.origin;
   const [dx, dy, dz] = ray.direction;
+  const near = ray.near ?? 0;
+  const far = ray.far ?? Infinity;
   const [nx, ny, nz, nd] = s.section;
   const p: [number, number, number] = [0, 0, 0];
   const span: [number, number] = [0, Infinity];
@@ -78,13 +89,15 @@ export function pickBlock(ray: PickRay, s: PickScene): number | null {
     const hy = s.blockSize[1] * k;
     const hz = s.blockSize[2] * k;
 
-    // Slab test on t ∈ [0, ∞): only hits in front of (or around) the origin count.
-    span[0] = 0;
+    // Slab test on the whole line; span[0] is then the front-face entry distance.
+    span[0] = -Infinity;
     span[1] = Infinity;
     if (
       clipSlab(ox, dx, p[0] - hx, p[0] + hx, span) &&
       clipSlab(oy, dy, p[1] - hy, p[1] + hy, span) &&
       clipSlab(oz, dz, p[2] - hz, p[2] + hz, span) &&
+      span[0] >= near && // entry in front of the near plane (not inside the block, not clipped)
+      span[0] <= far &&
       span[0] < best
     ) {
       best = span[0];

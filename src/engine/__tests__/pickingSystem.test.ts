@@ -98,6 +98,47 @@ describe('picking system (P2)', () => {
     expect(ctx.store.getState().selection).toBe(b.id);
   });
 
+  it('a drag that leaves the slop and comes back is still a drag (Codex review)', () => {
+    const ctx = setup();
+    const b = topBlock(12, 7);
+    lookDownAt(ctx, b.x, b.y);
+    ctx.store.getState().select(5);
+    ctx.canvas.dispatchEvent(pointer('pointerdown', W / 2, H / 2));
+    ctx.canvas.dispatchEvent(pointer('pointermove', W / 2 + 100, H / 2));
+    ctx.canvas.dispatchEvent(pointer('pointermove', W / 2, H / 2));
+    ctx.canvas.dispatchEvent(pointer('pointerup', W / 2, H / 2));
+    expect(ctx.store.getState().selection).toBe(5);
+    // Small jitter inside the slop is still a click.
+    ctx.canvas.dispatchEvent(pointer('pointerdown', W / 2, H / 2));
+    ctx.canvas.dispatchEvent(pointer('pointermove', W / 2 + CLICK_SLOP_PX - 1, H / 2));
+    ctx.canvas.dispatchEvent(pointer('pointerup', W / 2, H / 2));
+    expect(ctx.store.getState().selection).toBe(b.id);
+  });
+
+  it('camera inside a block or with the top face near-clipped picks what is drawn: the block below', () => {
+    const ctx = setup();
+    const b = topBlock(12, 7);
+    const below = blockIndex(model.grid, 12, 7, model.grid.nz - 2);
+    const top = model.centroid[3 * b.id + 2] + model.grid.blockSize[2] / 2;
+    // Inside the top block.
+    ctx.camera.position.set(b.x, b.y - 0.001, top - 0.5);
+    ctx.camera.lookAt(b.x, b.y, top - 10);
+    click(ctx);
+    expect(ctx.store.getState().selection).toBe(below);
+    ctx.store.getState().select(null);
+    // Just above the top face, closer than the near plane (0.5 m).
+    ctx.camera.position.set(b.x, b.y - 0.001, top + 0.2);
+    ctx.camera.lookAt(b.x, b.y, top - 10);
+    click(ctx);
+    expect(ctx.store.getState().selection).toBe(below);
+    // Beyond the near plane: the top block again.
+    ctx.store.getState().select(null);
+    ctx.camera.position.set(b.x, b.y - 0.001, top + 0.8);
+    ctx.camera.lookAt(b.x, b.y, top - 10);
+    click(ctx);
+    expect(ctx.store.getState().selection).toBe(b.id);
+  });
+
   it('right/middle buttons and non-primary pointers never pick', () => {
     const ctx = setup();
     const b = topBlock(12, 7);

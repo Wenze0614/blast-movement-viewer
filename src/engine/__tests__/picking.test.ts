@@ -47,8 +47,21 @@ describe('pickBlock (synthetic)', () => {
     expect(pickBlock({ origin: [10, 0, 0], direction: [0, 0, 1] }, row())).toBeNull();
   });
 
-  it('an origin inside a block picks that block', () => {
-    expect(pickBlock({ origin: [2.2, 0, 0], direction: [1, 0, 0] }, row())).toBe(1);
+  it('an origin inside a block skips it (its faces are back faces from inside, culled) and hits the next', () => {
+    expect(pickBlock({ origin: [2.2, 0, 0], direction: [1, 0, 0] }, row())).toBe(2);
+    expect(pickBlock({ origin: [4.2, 0, 0], direction: [1, 0, 0] }, row())).toBeNull();
+  });
+
+  it('near/far clipping: an entry closer than near or beyond far is not drawn, so not picked', () => {
+    // Entries along +x from x = -10: block 0 at t = 9.5, block 1 at 11.5, block 2 at 13.5.
+    const ray = { origin: [-10, 0, 0] as const, direction: [1, 0, 0] as const };
+    expect(pickBlock({ ...ray, near: 9.4 }, row())).toBe(0);
+    expect(pickBlock({ ...ray, near: 9.6 }, row())).toBe(1);
+    expect(pickBlock({ ...ray, near: 13.6 }, row())).toBeNull();
+    expect(pickBlock({ ...ray, far: 9.4 }, row())).toBeNull();
+    expect(pickBlock({ ...ray, far: 9.6 }, row())).toBe(0);
+    // Units of |direction|: a direction of length 2 halves the distances.
+    expect(pickBlock({ origin: [-10, 0, 0], direction: [2, 0, 0], near: 4.8 }, row())).toBe(1);
   });
 
   it('axis-aligned rays work (zero direction components)', () => {

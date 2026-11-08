@@ -19,6 +19,19 @@ function loaded(): AppStore {
   return store;
 }
 
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Let pending promise callbacks (and one macrotask) run. */
+const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
 const fakeDerived = (): Derived => ({ polygons: {} as Derived['polygons'], reconciliation: {} as Derived['reconciliation'] });
 
 describe('store setters clear stale derived slots', () => {
@@ -56,6 +69,35 @@ describe('store setters clear stale derived slots', () => {
     store.getState().setMovement(movement, 'local');
     store.getState().resetParams();
     expect(store.getState().movement).toBeNull();
+  });
+
+  it('invalidating the movement rewinds playback atomically (no frame shows old progress without the movement)', () => {
+    const store = loaded();
+    store.getState().setProgress(1);
+    const seen: { movement: unknown; progress: number; playing: boolean }[] = [];
+    const unsub = store.subscribe(({ movement, progress, playing }) => seen.push({ movement, progress, playing }));
+
+    store.getState().setParams({ maxThrow: 14 }); // param change at progress 1
+    expect(store.getState()).toMatchObject({ movement: null, progress: 0, playing: false });
+
+    store.getState().setMovement(movement, 'local');
+    store.getState().setProgress(0.6);
+    store.getState().play();
+    store.getState().setModel({ ...model } as BlockModel, 'local'); // new model mid-playback
+    expect(store.getState()).toMatchObject({ movement: null, progress: 0, playing: false });
+    unsub();
+
+    // Every notification without a movement already carries progress 0.
+    expect(seen.filter((x) => x.movement === null).every((x) => x.progress === 0)).toBe(true);
+  });
+
+  it('a new movement always lands at progress 0 and keeps a pending play', () => {
+    const store = createAppStore();
+    store.getState().setModel(model, 'local');
+    store.getState().play(); // Blast pressed while the movement is loading
+    store.getState().setProgress(0.4); // e.g. a scrub while loading
+    store.getState().setMovement(movement, 'local');
+    expect(store.getState()).toMatchObject({ progress: 0, playing: true });
   });
 
   it('re-selecting the current blast is a no-op (keeps data)', () => {
@@ -172,6 +214,69 @@ describe('data pipeline (blast → model → movement → derived)', () => {
     const pipeline = startDataPipeline(store, data);
     await pipeline.settled;
     expect(store.getState()).toMatchObject({ status: 'error', error: 'boom' });
+    pipeline.dispose();
+  });
+
+  it('a superseded movement request rejecting with an ordinary error does not touch the newer request', async () => {
+    const data = new LocalDataSource();
+    const stale = deferred<MovementResult>();
+    const fresh = deferred<MovementResult>();
+    const getMovement = vi
+      .spyOn(data, 'getMovement')
+      .mockImplementationOnce(() => stale.promise) // ignores its AbortSignal on purpose
+      .mockImplementationOnce(() => fresh.promise);
+    const store = createAppStore();
+    const pipeline = startDataPipeline(store, data);
+    await vi.waitFor(() => expect(getMovement).toHaveBeenCalledTimes(1));
+
+    store.getState().setParams({ maxThrow: 15 }); // supersedes the first request
+    expect(getMovement).toHaveBeenCalledTimes(2);
+    stale.reject(new Error('stale failure'));
+    await flush();
+    expect(store.getState()).toMatchObject({ status: 'loading', error: null });
+
+    const params = store.getState().params;
+    fresh.resolve(await new LocalDataSource().getMovement('b1040-017', params));
+    await pipeline.settled;
+    expect(store.getState()).toMatchObject({ status: 'ready', error: null });
+    expect(store.getState().movement?.params.maxThrow).toBe(15);
+
+    stale.reject(new Error('late')); // no-op: already settled, still ignored
+    pipeline.dispose();
+  });
+
+  it('a superseded movement request resolving late is not applied', async () => {
+    const data = new LocalDataSource();
+    const stale = deferred<MovementResult>();
+    const getMovement = vi.spyOn(data, 'getMovement').mockImplementationOnce(() => stale.promise);
+    const store = createAppStore();
+    const pipeline = startDataPipeline(store, data);
+    await vi.waitFor(() => expect(getMovement).toHaveBeenCalledTimes(1));
+    store.getState().setParams({ maxThrow: 15 });
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    const current = store.getState().movement;
+    stale.resolve(movement); // computed for the old params
+    await pipeline.settled;
+    expect(store.getState().movement).toBe(current);
+    expect(store.getState().status).toBe('ready');
+    pipeline.dispose();
+  });
+
+  it('a superseded blast request rejecting with an ordinary error does not error the new blast', async () => {
+    const data = new LocalDataSource();
+    const stale = deferred<BlockModel>();
+    const getModel = vi.spyOn(data, 'getModel').mockImplementationOnce(() => stale.promise);
+    const store = createAppStore();
+    const pipeline = startDataPipeline(store, data);
+    await vi.waitFor(() => expect(getModel).toHaveBeenCalledTimes(1));
+
+    store.getState().setBlastId('b1030-022');
+    stale.reject(new Error('old blast failed'));
+    await flush();
+    expect(store.getState().status).not.toBe('error');
+    await pipeline.settled;
+    expect(store.getState()).toMatchObject({ status: 'ready', error: null });
+    expect(store.getState().blast?.id).toBe('b1030-022');
     pipeline.dispose();
   });
 

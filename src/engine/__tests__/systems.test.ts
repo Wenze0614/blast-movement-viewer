@@ -15,6 +15,8 @@ import type { RendererLike } from '../context';
 import { createBlocksSystem } from '../systems/blocks';
 import { createDigLinesSystem } from '../systems/digLines';
 import { createEnvironmentSystem } from '../systems/environment';
+import { createPlaybackSystem } from '../systems/playback';
+import { createRenderSystem } from '../systems/render';
 import type { EngineContext, System } from '../types';
 
 const data = new LocalDataSource();
@@ -191,6 +193,132 @@ describe('dig lines + environment systems', () => {
     ctx.bag.disposeAll();
     expect(watch.allDisposed()).toBe(true);
     expect(ctx.scene.children).toHaveLength(0);
+  });
+});
+
+describe('param change / new movement transitions (no block jumps)', () => {
+  /**
+   * Where the shader puts block i: at progress 0 every block is at aStart (bmvBlockProgress(0, delay ≥ 0)
+   * = 0), and only there can it be computed without the GPU — so the invariant tested is "geometry
+   * only changes while progress is 0", plus "the new aStart equals the old in-situ position".
+   */
+  function rig() {
+    const store = createAppStore();
+    const ctx = mockCtx(store);
+    const blocks = createBlocksSystem(ctx, {});
+    const playback = createPlaybackSystem(ctx, {});
+    const frame = (dt = 1 / 60) => {
+      playback.update?.({ dt, elapsed: 0, frame: 0 });
+      blocks.update?.({ dt, elapsed: 0, frame: 0 });
+    };
+    const mesh = () => ctx.scene.getObjectByName('blocks') as THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
+    const attr = (name: string) => mesh().geometry.getAttribute(name).array as Float32Array;
+    const uProgress = () => mesh().material.uniforms.uProgress.value as number;
+    // Record the progress at every geometry rebuild.
+    const rebuildProgress: number[] = [];
+    store.subscribe(
+      (s) => s.movement,
+      () => rebuildProgress.push(store.getState().progress),
+    );
+    return { store, blocks, frame, attr, uProgress, rebuildProgress };
+  }
+
+  it('param change at progress 1: rewinds to 0 and pauses in the same update; the new movement lands in place', async () => {
+    const { store, blocks, frame, attr, uProgress, rebuildProgress } = rig();
+    await blocks.init?.();
+    store.getState().setModel(model, 'local');
+    store.getState().setMovement(movement, 'local');
+    store.getState().play();
+    for (let i = 0; i < 200 && store.getState().playing; i++) frame();
+    expect(uProgress()).toBe(1);
+
+    store.getState().setParams({ maxThrow: 15 });
+    frame();
+    expect(store.getState()).toMatchObject({ movement: null, progress: 0, playing: false });
+    expect(uProgress()).toBe(0);
+    const inSitu = Float32Array.from(attr('aStart'));
+    expect(inSitu).toEqual(model.centroid);
+
+    const next = await data.getMovement('b1040-017', store.getState().params);
+    store.getState().setMovement(next, 'local');
+    frame();
+    expect(uProgress()).toBe(0);
+    expect(attr('aStart')).toEqual(inSitu); // shown position (aStart at progress 0) unchanged → no pop
+    expect(attr('aEnd')).toBe(next.end);
+    expect(rebuildProgress.every((p) => p === 0)).toBe(true);
+  });
+
+  it('new movement while playback is active: holds at 0 while loading, then animates from in situ', async () => {
+    const { store, blocks, frame, attr, uProgress, rebuildProgress } = rig();
+    await blocks.init?.();
+    store.getState().setModel(model, 'local');
+    store.getState().setMovement(movement, 'local');
+    store.getState().play();
+    for (let i = 0; i < 60; i++) frame(); // mid-flight
+    expect(uProgress()).toBeGreaterThan(0.3);
+
+    store.getState().setParams({ maxThrow: 15 }); // invalidated mid-playback
+    store.getState().play(); // user presses Blast again while the new movement loads
+    for (let i = 0; i < 60; i++) frame();
+    expect(store.getState()).toMatchObject({ progress: 0, playing: true });
+    expect(uProgress()).toBe(0);
+
+    const next = await data.getMovement('b1040-017', store.getState().params);
+    store.getState().setMovement(next, 'local');
+    expect(store.getState().progress).toBe(0);
+    expect(attr('aStart')).toEqual(model.centroid);
+    frame(0.25);
+    expect(uProgress()).toBeCloseTo(0.1, 6); // animating from the start, not snapped mid-way
+    expect(rebuildProgress.every((p) => p === 0)).toBe(true);
+  });
+});
+
+describe('render system: canvas size and device pixel ratio', () => {
+  function setDpr(value: number) {
+    Object.defineProperty(window, 'devicePixelRatio', { value, configurable: true });
+  }
+
+  it('updates the pixel ratio when devicePixelRatio changes without a canvas resize (capped at 2)', async () => {
+    setDpr(1);
+    const listeners = new Map<string, () => void>();
+    const removed: string[] = [];
+    const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation(
+      (query: string) =>
+        ({
+          media: query,
+          matches: true,
+          addEventListener: (_: string, fn: () => void) => listeners.set(query, fn),
+          removeEventListener: () => removed.push(query),
+        }) as unknown as MediaQueryList,
+    );
+    const ctx = mockCtx();
+    const renderer = { setPixelRatio: vi.fn(), setSize: vi.fn(), render: vi.fn() };
+    ctx.renderer = renderer as unknown as THREE.WebGLRenderer;
+    const system = createRenderSystem(ctx, {});
+    await system.init?.();
+    expect(renderer.setPixelRatio).toHaveBeenLastCalledWith(1);
+    expect(renderer.setSize).toHaveBeenCalledTimes(1);
+    system.update?.({ dt: 0, elapsed: 0, frame: 0 });
+    expect(renderer.setSize).toHaveBeenCalledTimes(1); // nothing changed → no resize
+
+    // Window moved to a retina display: CSS size unchanged, the media query fires.
+    setDpr(2);
+    listeners.get('(resolution: 1dppx)')!();
+    expect(ctx.invalidate).toHaveBeenCalled();
+    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 2dppx)'); // re-armed for the new DPR
+    expect(removed).toContain('(resolution: 1dppx)');
+    system.update?.({ dt: 0, elapsed: 0, frame: 1 });
+    expect(renderer.setPixelRatio).toHaveBeenLastCalledWith(2);
+    expect(renderer.setSize).toHaveBeenCalledTimes(2);
+
+    setDpr(3); // capped: still 2, no work
+    system.update?.({ dt: 0, elapsed: 0, frame: 2 });
+    expect(renderer.setPixelRatio).toHaveBeenCalledTimes(2);
+
+    ctx.bag.disposeAll();
+    expect(removed).toContain('(resolution: 2dppx)');
+    matchMedia.mockRestore();
+    setDpr(1);
   });
 });
 

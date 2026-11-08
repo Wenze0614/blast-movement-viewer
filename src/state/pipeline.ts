@@ -1,8 +1,11 @@
 /**
  * Load pipeline: blast → model → movement through the DataSource (ADR-7, ADR-9), then the derive
  * step. Discrete store changes drive it: a new `blastId` reloads everything, new `params` reload
- * the movement. Each load aborts the one it replaces (AbortSignal), and a result is written only
- * if the inputs it was computed for are still current.
+ * the movement. Each load aborts the one it replaces (AbortSignal). A request's outcome (result OR
+ * error) is applied only while that request is still current: its own controller is not aborted
+ * and the inputs it captured (blastId, model, params) are still the store's. A superseded request
+ * that rejects with an ordinary error is ignored, so it can never overwrite the newer request's
+ * loading/ready status.
  */
 import { isAbortError, type DataSource } from '@/data';
 import { attachDerive } from './derive';
@@ -27,8 +30,9 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     settled = Promise.all([settled, p]).then(() => undefined);
   };
 
-  const fail = (err: unknown) => {
-    if (disposed || isAbortError(err)) return;
+  /** Report an error unless the request it belongs to was aborted or superseded (`isCurrent()` false). */
+  const fail = (err: unknown, isCurrent: () => boolean = () => true) => {
+    if (disposed || isAbortError(err) || !isCurrent()) return;
     store.getState().setStatus('error', message(err));
   };
 
@@ -37,15 +41,18 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     if (!model) return;
     movementCtrl?.abort();
     const ctrl = (movementCtrl = new AbortController());
+    const isCurrent = () => {
+      const s = store.getState();
+      return !ctrl.signal.aborted && !disposed && s.blastId === blastId && s.model === model && s.params === params;
+    };
     store.getState().setStatus('loading');
     const t0 = now();
     try {
       const movement = await data.getMovement(blastId, params, ctrl.signal);
-      const s = store.getState();
-      if (ctrl.signal.aborted || disposed || s.model !== model || s.params !== params) return;
-      s.setMovement(movement, data.kind, now() - t0);
+      if (!isCurrent()) return;
+      store.getState().setMovement(movement, data.kind, now() - t0);
     } catch (err) {
-      fail(err);
+      fail(err, isCurrent);
     }
   }
 
@@ -53,17 +60,18 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     blastCtrl?.abort();
     movementCtrl?.abort();
     const ctrl = (blastCtrl = new AbortController());
+    const isCurrent = () => !ctrl.signal.aborted && !disposed && store.getState().blastId === id;
     store.getState().setStatus('loading');
     try {
       const detail = await data.getBlast(id);
-      if (ctrl.signal.aborted || disposed || store.getState().blastId !== id) return;
+      if (!isCurrent()) return;
       store.getState().setBlast(detail);
       const model = await data.getModel(id, ctrl.signal);
-      if (ctrl.signal.aborted || disposed || store.getState().blastId !== id) return;
+      if (!isCurrent()) return;
       store.getState().setModel(model, data.kind);
-      await loadMovement();
+      await loadMovement(); // reports its own errors, guarded by its own staleness check
     } catch (err) {
-      fail(err);
+      fail(err, isCurrent);
     }
   }
 

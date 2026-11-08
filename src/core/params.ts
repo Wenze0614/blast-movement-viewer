@@ -5,7 +5,7 @@
  */
 import type { BlastParameters } from './types';
 
-export type NumericParamKey = Exclude<keyof BlastParameters, 'freeFace'>;
+export type NumericParamKey = Exclude<keyof BlastParameters, 'freeFace' | 'initiation'>;
 
 export interface ParamRange {
   min: number;
@@ -16,6 +16,9 @@ export interface ParamRange {
 }
 
 export const PARAM_RANGES: Readonly<Record<NumericParamKey, ParamRange>> = Object.freeze({
+  /** > 0 so the throw always has a component toward the face. */
+  rowDelayMs: { min: 5, max: 200 },
+  holeDelayMs: { min: 0, max: 200 },
   maxThrow: { min: 0, max: 25 },
   backRowRatio: { min: 0, max: 1 },
   throwExponent: { min: 0.5, max: 3 },
@@ -31,3 +34,4 @@ export const PARAM_RANGES: Readonly<Record<NumericParamKey, ParamRange>> = Objec
 });
 
 export const FREE_FACES = ['east', 'west', 'north', 'south'] as const satisfies readonly BlastParameters['freeFace'][];
+export const INITIATIONS = ['row', 'v', 'echelon-left', 'echelon-right'] as const satisfies readonly BlastParameters['initiation'][];

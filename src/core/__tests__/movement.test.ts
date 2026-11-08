@@ -500,15 +500,22 @@ describe('computeMovement outputs', () => {
       expect(blockModelConfigHash(base)).toMatch(/^[0-9a-f]{16}$/);
     });
 
-    it('display-only blast fields (name, description, pattern, default params) do not change the hash', () => {
+    it('display-only blast fields (name, description, default params) do not change the hash', () => {
       const relabelled = {
         ...base,
         name: 'Renamed',
         description: 'Other text',
-        pattern: { ...base.pattern, burden: 5 },
         defaultParams: { ...base.defaultParams, maxThrow: 3 },
       };
       expect(blockModelConfigHash(relabelled)).toBe(blockModelConfigHash(base));
+    });
+
+    it('the drill pattern IS part of the hash (burden and spacing shape the firing sequence)', () => {
+      const wider = { ...base, pattern: { ...base.pattern, burden: 5 } };
+      expect(blockModelConfigHash(wider)).not.toBe(blockModelConfigHash(base));
+      const m = generateBlockModel(wider);
+      expect(m.pattern.burden).toBe(5);
+      expect(hashOf(wider)).not.toBe(hashOf(base));
     });
 
     it('refuses a model without configHash instead of hashing it ambiguously', () => {

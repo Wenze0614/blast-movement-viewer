@@ -4,7 +4,7 @@
  */
 import { z } from 'zod';
 import { canonicalParams } from '@/core/hash';
-import { FREE_FACES, PARAM_RANGES, type NumericParamKey } from '@/core/params';
+import { FREE_FACES, INITIATIONS, PARAM_RANGES, type NumericParamKey } from '@/core/params';
 import type { BlastParameters } from '@/core/types';
 
 /** A query-string number: a finite decimal inside [min, max] ('' and 'abc' are rejected). */
@@ -22,7 +22,7 @@ function numberParam(key: NumericParamKey) {
 }
 
 /**
- * `GET /api/blasts/:id/movement?freeFace=east&maxThrow=10&…&seed=42[&v=<data version>]`.
+ * `GET /api/blasts/:id/movement?freeFace=east&initiation=v&rowDelayMs=42&…&seed=42[&v=<data version>]`.
  * Every parameter is required (an immutable URL must name its full input, ADR-12); `v` is the
  * client's cache-busting data version and does not affect the result. Unknown keys → 400.
  * Output: canonical BlastParameters (fixed key order, 2 dp, uint32 seed).
@@ -30,6 +30,9 @@ function numberParam(key: NumericParamKey) {
 export const MovementQuery = z
   .strictObject({
     freeFace: z.enum(FREE_FACES, { error: `freeFace must be one of ${FREE_FACES.join(', ')}` }),
+    initiation: z.enum(INITIATIONS, { error: `initiation must be one of ${INITIATIONS.join(', ')}` }),
+    rowDelayMs: numberParam('rowDelayMs'),
+    holeDelayMs: numberParam('holeDelayMs'),
     maxThrow: numberParam('maxThrow'),
     backRowRatio: numberParam('backRowRatio'),
     throwExponent: numberParam('throwExponent'),

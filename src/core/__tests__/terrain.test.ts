@@ -150,6 +150,8 @@ describe('buildPitTerrain', () => {
     ['far, loose and flat', { maxThrow: 25, swellFactor: 1.6, reposeAngleDeg: 25, lateralFan: 5, lateralSigma: 5, randomness: 1, backRowRatio: 1, toeRatio: 1 }],
     ['no throw, no swell, steep', { maxThrow: 0, swellFactor: 1, reposeAngleDeg: 45 }],
     ['facing north', { freeFace: 'north', maxThrow: 25, swellFactor: 1.6, reposeAngleDeg: 25 }],
+    ['echelon, near-lateral throw', { initiation: 'echelon-left', rowDelayMs: 5, holeDelayMs: 200, maxThrow: 25, swellFactor: 1.6, reposeAngleDeg: 25 }],
+    ['V, near-lateral throw', { initiation: 'v', rowDelayMs: 5, holeDelayMs: 200, maxThrow: 25 }],
   ];
 
   it.each(EXTREMES)('every settled block sits on the floor over its whole swollen footprint (%s)', (_name, over) => {

@@ -11,6 +11,9 @@
  *    D = footprint depth; h = 0 toe … 1 crest; b̂ = lateral position in the footprint, −1 … 1):
  *      T = T_max · [r_back + (1 − r_back)(1 − s)^p] · [r_toe + (1 − r_toe)·h] · (1 + 0.25·R·n₁)
  *      L = R·σ_lat·n₂ + fan·b̂·(1 − s)
+ *      target = (a, b) + T·r̂ + (0, L)
+ *    r̂ = burden-relief direction from the firing sequence (timing.ts: straight at the face for
+ *    row-by-row, toward the centre line for a V, toward the initiating corner for an echelon).
  *    n₁, n₂ = seeded 3D simplex noise at centroid / noiseLength.
  * 2. Swell + re-grid: k = swell^(1/3); post-blast plan grid of cell c′ = c·k from the back of the
  *    box to past the throw; bin each target. Rock can only land on free ground: inside the blast
@@ -23,7 +26,8 @@
  * 4. Angle-of-repose relaxation: move the top block of the tallest offending cell to its lowest
  *    valid neighbour until stable or 20·N moves (see `allowedDrop` for the lattice criterion).
  *    Stacks are re-sorted by original z afterwards, so vertical order is preserved.
- * 5. Animation delay = 0.45·s + 0.05·noise ∈ [0, 0.5]: front rows fire first (visual only).
+ * 5. Animation delay = 0.45·(t − t_min)/(t_max − t_min) + 0.05·noise ∈ [0, 0.5], t = the firing
+ *    time of the block's hole band (timing.ts): blocks start moving in firing order (visual only).
  *
  * Swell scales block size, cell size and stack height by k, so loose volume = swell × bank volume.
  */
@@ -31,14 +35,16 @@ import type { NoiseFunction3D } from 'simplex-noise';
 import { canonicalParams, hashParams } from './hash';
 import { floorMargin, modelFootprint } from './footprint';
 import { createSeededNoise3D, deriveSeed } from './rng';
+import { createFiringField } from './timing';
 import type { BlastParameters, BlockModel, GridSpec, Heightfield, MovementResult } from './types';
 
 /**
  * Version of this movement heuristic. Bump it whenever a code change alters `computeMovement`
  * output for the same model + params, so immutable cached responses keyed on paramsHash expire.
  * v2: irregular footprints (per-strip free face, rock confined by the unblasted ground).
+ * v3: throw direction and animation delay from the firing sequence (timing.ts).
  */
-export const MOVEMENT_MODEL_VERSION = 2;
+export const MOVEMENT_MODEL_VERSION = 3;
 
 /** ADR-3 step 4: stop after 20·N block moves even if not fully relaxed. */
 export const RELAXATION_MOVE_FACTOR = 20;
@@ -89,6 +95,8 @@ function assertParams(p: BlastParameters): void {
   if (!(p.reposeAngleDeg > 0 && p.reposeAngleDeg < 90)) bad('reposeAngleDeg must be in (0, 90)');
   if (!(p.noiseLength > 0)) bad('noiseLength must be > 0');
   if (!(p.maxThrow >= 0)) bad('maxThrow must be >= 0');
+  if (!(p.rowDelayMs > 0)) bad('rowDelayMs must be > 0');
+  if (!(p.holeDelayMs >= 0)) bad('holeDelayMs must be >= 0');
 }
 
 /** Binary max-heap of numbers (priority-encoded cells). */
@@ -217,6 +225,10 @@ export function computeMovementDetailed(
   };
   let pathFallbacks = 0;
 
+  const firing = createFiringField(fp, model.pattern, params);
+  const fireMs = new Float64Array(N);
+  const delayNoise = new Float64Array(N);
+
   const cellOf = new Int32Array(N);
   // Unique per block: (flitch, row from front, lateral index) over the dense bounding grid.
   const gridCount = nAlong * nLat * grid.nz;
@@ -248,8 +260,9 @@ export function computeMovementDetailed(
       (1 + 0.25 * R * n1);
     const L = R * params.lateralSigma * n2 + params.lateralFan * ((b - latCentre) / latHalf) * (1 - s);
 
-    const ta = Math.min(aMax, Math.max(0, a + T)); // never behind the back of the box
-    const tb = Math.min(bMax, Math.max(bMin, b + L));
+    const [ra, rbl] = firing.reliefAt(a, b);
+    const ta = Math.min(aMax, Math.max(0, a + T * ra)); // never behind the back of the box
+    const tb = Math.min(bMax, Math.max(bMin, b + T * rbl + L));
     let ia = Math.floor(ta / cell);
     let ib = Math.floor(tb / cell) + mLat;
     const wanted = lc(ia, ib);
@@ -286,9 +299,19 @@ export function computeMovementDetailed(
     const bi = Math.min(nLat - 1, Math.max(0, Math.floor(b / cb)));
     rank[n] = (kk * nAlong + (nAlong - 1 - ai)) * nLat + bi;
 
-    // Step 5: front rows fire first.
-    const nd = (noiseD(qx, qy, qz) + 1) / 2;
-    delay[n] = Math.min(0.5, Math.max(0, 0.45 * s + 0.05 * nd));
+    // Step 5 (below, once the firing-time range is known): blocks start in firing order.
+    fireMs[n] = firing.timeAt(a, b);
+    delayNoise[n] = (noiseD(qx, qy, qz) + 1) / 2;
+  }
+  let tMin = Infinity;
+  let tMax = -Infinity;
+  for (let n = 0; n < N; n++) {
+    tMin = Math.min(tMin, fireMs[n]);
+    tMax = Math.max(tMax, fireMs[n]);
+  }
+  const tSpan = tMax > tMin ? tMax - tMin : 1;
+  for (let n = 0; n < N; n++) {
+    delay[n] = Math.min(0.5, Math.max(0, (0.45 * (fireMs[n] - tMin)) / tSpan + 0.05 * delayNoise[n]));
   }
 
   // ── Step 3: stacking — sort by (cell, rank) ─────────────────────────────

@@ -15,7 +15,8 @@
  *
  * - model:    centroid (f32 3N), grade, density, tonnes (f32 N), cell (u32 N), rockType,
  *             oreClass (u8 N). Header: count, grid (the bounding grid: count ≤ nx·ny·nz),
- *             grades, seed, configHash (computeMovement needs it, ADR-12). `cell` holds each
+ *             grades, pattern (burden/spacing drive the firing sequence), seed, configHash
+ *             (computeMovement needs it, ADR-12). `cell` holds each
  *             block's grid cell index, strictly increasing (schema v2: sparse models).
  * - movement: end (f32 3N), delay (f32 N), surface.height (f32 nx·ny).
  *             Header: count, params, paramsHash, looseScale, postGrid, surface spec and the model
@@ -25,7 +26,7 @@
  * Byte order: sections are written and read through typed arrays, which use the platform order.
  * Every supported platform (x86, ARM, WASM) is little-endian; a big-endian host throws.
  */
-import type { BlastParameters, BlockModel, GradeSettings, GridSpec, MovementResult, Vec2 } from './types';
+import type { BlastParameters, BlastPattern, BlockModel, GradeSettings, GridSpec, MovementResult, Vec2 } from './types';
 
 export const BMV1_MAGIC = 'BMV1';
 /** v2: sparse models (the `cell` section). v1 payloads are rejected (UNSUPPORTED_VERSION). */
@@ -76,6 +77,7 @@ export interface ModelHeader extends HeaderBase {
   kind: 'model';
   grid: GridSpec;
   grades: GradeSettings;
+  pattern: BlastPattern;
   seed: number;
   configHash: string;
 }
@@ -154,7 +156,15 @@ function encode(meta: HeaderMeta, sections: Section[]): Uint8Array<ArrayBuffer> 
 export function encodeModel(model: BlockModel): Uint8Array<ArrayBuffer> {
   if (!model.configHash) throw new TypeError('encodeModel: model.configHash is required');
   return encode(
-    { kind: 'model', count: model.count, grid: model.grid, grades: model.grades, seed: model.seed, configHash: model.configHash },
+    {
+      kind: 'model',
+      count: model.count,
+      grid: model.grid,
+      grades: model.grades,
+      pattern: model.pattern,
+      seed: model.seed,
+      configHash: model.configHash,
+    },
     [
       { name: 'centroid', data: model.centroid },
       { name: 'grade', data: model.grade },
@@ -314,6 +324,13 @@ function checkModelHeader(h: ModelHeader): void {
   const gr = obj(h.grades, 'grades');
   num(gr.cutoff, 'grades.cutoff');
   num(gr.highGrade, 'grades.highGrade');
+  const pt = obj(h.pattern, 'pattern');
+  for (const k of ['burden', 'spacing'] as const) {
+    num(pt[k], `pattern.${k}`);
+    if (!((pt[k] as number) > 0)) bad(`pattern.${k} must be > 0`);
+  }
+  for (const k of ['holeDiameterMm', 'subdrill'] as const) num(pt[k], `pattern.${k}`);
+  for (const k of ['rows', 'holesPerRow'] as const) uint(pt[k], `pattern.${k}`);
   num(h.seed, 'seed');
   str(h.configHash, 'configHash');
 }
@@ -363,6 +380,7 @@ export function decodeModel(input: Input): BlockModel {
     grades: header.grades,
     count: n,
     cell,
+    pattern: header.pattern,
     centroid: v.centroid as Float32Array,
     grade: v.grade as Float32Array,
     density: v.density as Float32Array,

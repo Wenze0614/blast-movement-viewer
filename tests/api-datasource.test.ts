@@ -78,7 +78,7 @@ describe('ApiDataSource through the route handlers', () => {
     expect(s.reconciliation).not.toBeNull(); // derive ran on the decoded payloads
     const urls = routedFetch.mock.calls.map(([u]) => String(u));
     expect(urls.some((u) => /\/model\?v=[0-9a-f]{8}$/.test(u))).toBe(true);
-    expect(urls.some((u) => /\/movement\?freeFace=east&maxThrow=10&.*&seed=42&v=[0-9a-f]{8}$/.test(u))).toBe(true);
+    expect(urls.some((u) => /\/movement\?freeFace=east&initiation=v&rowDelayMs=42&holeDelayMs=25&maxThrow=10&.*&seed=42&v=[0-9a-f]{8}$/.test(u))).toBe(true);
     pipeline.dispose();
   });
 

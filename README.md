@@ -32,6 +32,11 @@ Media to capture in a browser (not yet recorded); add the image links once the f
   (contoured on the post-blast model), toggleable.
 - **Colour modes.** Grade class, outcome (ore → mill, ore lost, dilution, waste → waste) and
   movement distance.
+- **Click to inspect.** Click any block, before, during or after the blast, to highlight it and
+  see its grade, tonnes, in-situ and final position, displacement, and where it goes (mill or
+  waste) under each reconciliation scenario. Picking is a CPU ray–box test on the same easing as
+  the shader, so it hits what is on screen at any scrub position and skips blocks hidden by the
+  section or ore-only. Esc or × closes it.
 - **Section and ore-only.** A section plane through the bench (the cut face shows ore pushed under
   waste) and a toggle that hides waste blocks.
 - **Reconciliation table.** Mill tonnes, mill grade, ore loss %, dilution %, ounces to the mill and
@@ -92,11 +97,12 @@ npm run build && npm run start   # production build
   phase (`input → simulate → animate → render`), updates from a clamped `dt`, and has a mandatory
   `dispose()`; every GPU resource goes into a `DisposeBag`. React StrictMode stays on, and a
   mount → unmount → mount cycle returns renderer memory to baseline. Current order: controls →
-  playback → blocks → holes → dig lines → environment → render.
+  picking → playback → blocks → holes → dig lines → environment → render.
 - **Owned `ShaderMaterial` with GPU interpolation.** The blocks are one `InstancedBufferGeometry`
   (unit box) with `aStart`, `aEnd`, `aDelay` and `aColor`. The vertex shader eases each block from
   start to end with a throw arc and the swell scale, so scrubbing costs **one uniform write per
-  frame** at any block count. No `onBeforeCompile` patching. The holes use the same approach (one
+  frame** at any block count. No `onBeforeCompile` patching. The selected block is one more
+  uniform (`uSelected`, compared with `gl_InstanceID`), so selecting never touches a buffer. The holes use the same approach (one
   instanced cylinder mesh, one opacity uniform). Lighting is a small hand-written chunk shared by
   both, so there are no scene lights. The hole material is opaque before the blast and switches to
   transparent with `depthWrite: false` only while it fades, so fading holes never hide what is

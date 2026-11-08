@@ -1,6 +1,7 @@
 /**
  * simulate/playback (M4): while playing, advances store progress by dt / duration and stops at 1.
  * The scrubber writes progress directly; this system never fights it (it only runs while playing).
+ * Without a movement it holds (no frames spin); the movement arriving re-invalidates via blocks.
  */
 import type { SystemFactory } from '../types';
 
@@ -20,13 +21,15 @@ export const createPlaybackSystem: SystemFactory = (ctx) => {
     phase: 'simulate',
     update({ dt }) {
       const s = store.getState();
-      if (!s.playing) return;
+      // Hold at 0 while there is no movement yet (it lands at progress 0; store.setMovement).
+      if (!s.playing || !s.movement) return;
       const next = advanceProgress(s.progress, dt, s.duration);
       s.setProgress(next);
       if (next >= 1) s.pause();
     },
     isAnimating() {
-      return store.getState().playing;
+      const s = store.getState();
+      return s.playing && s.movement !== null;
     },
     dispose() {},
   };

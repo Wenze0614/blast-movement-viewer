@@ -153,12 +153,20 @@ function sameParams(a: BlastParameters, b: BlastParameters): boolean {
 }
 
 /**
+ * Invalidating the movement also rewinds playback, atomically: without a movement every block
+ * sits in situ (packInstances), so a kept progress (e.g. 1) would show the old end → in-situ
+ * jump now and an in-situ → new-end jump when the new movement lands at that progress. At
+ * progress 0, paused, the new movement arrives exactly where the blocks already are.
+ */
+const REWIND: Pick<AppState, 'progress' | 'playing'> = { progress: 0, playing: false };
+
+/**
  * New params make the current movement and everything derived from it stale: clear them so stale
- * results never show with new inputs. Unchanged params leave the state as it is.
+ * results never show with new inputs, and rewind (REWIND). Unchanged params leave the state as it is.
  */
 function paramsUpdate(state: AppState, next: BlastParameters): Partial<AppState> {
   if (sameParams(state.params, next)) return {};
-  return { params: { ...next }, movement: null, polygons: null, reconciliation: null };
+  return { params: { ...next }, movement: null, polygons: null, reconciliation: null, ...REWIND };
 }
 
 /** Factory so tests (and StrictMode remounts) can get an isolated store. */
@@ -188,13 +196,16 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       resetParams: () => set(paramsUpdate(get(), get().blast?.defaultParams ?? DEFAULT_BLAST_PARAMETERS)),
 
       setStatus: (status, error = null) => set({ status, error }),
-      // A new model invalidates the movement and everything derived from it.
+      // A new model invalidates the movement and everything derived from it, and rewinds.
       setModel: (model, source) =>
-        set({ model, source, movement: null, polygons: null, reconciliation: null, selection: null }),
+        set({ model, source, movement: null, polygons: null, reconciliation: null, selection: null, ...REWIND }),
       // A new movement invalidates the derived slots; the derive step (state/derive.ts) refills them.
+      // It always lands at progress 0 (blocks in situ, no pop). `playing` is kept: a Blast pressed
+      // while the movement was loading (playback holds at 0 meanwhile) starts from the beginning.
       setMovement: (movement, source, latencyMs) =>
         set({
           movement,
+          progress: 0,
           source,
           lastLatencyMs: latencyMs ?? null,
           status: 'ready',

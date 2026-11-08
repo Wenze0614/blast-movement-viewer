@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { MovementResult } from '@/core/types';
 import { createAppStore } from '@/state/store';
 import { clampDt, createFrameClock, createLoop, orderByPhase } from '../loop';
 import { advanceProgress, createPlaybackSystem } from '../systems/playback';
@@ -107,8 +108,11 @@ describe('playback dt math (M4)', () => {
     expect(advanceProgress(0.5, 0.1, 0)).toBe(1);
   });
 
+  // Playback only runs with a movement to show (it holds at 0 while one loads).
+  const someMovement = {} as MovementResult;
+
   it('2.5 s of 60 fps frames takes progress 0 → 1, then pauses', () => {
-    const store = createAppStore();
+    const store = createAppStore({ movement: someMovement });
     const ctx = { store, bag: { track: <T>(x: T) => x }, invalidate: vi.fn() } as unknown as EngineContext;
     const playback = createPlaybackSystem(ctx, {});
     store.getState().play();
@@ -123,6 +127,22 @@ describe('playback dt math (M4)', () => {
     expect(frames).toBeGreaterThanOrEqual(149);
     expect(frames).toBeLessThanOrEqual(151);
     expect(playback.isAnimating?.()).toBe(false);
+  });
+
+  it('holds at 0 (and does not spin frames) while playing without a movement; runs once it lands', () => {
+    const store = createAppStore();
+    const ctx = { store, bag: { track: <T>(x: T) => x }, invalidate: vi.fn() } as unknown as EngineContext;
+    const playback = createPlaybackSystem(ctx, {});
+    store.getState().play(); // Blast pressed while the movement is still loading
+    expect(playback.isAnimating?.()).toBe(false);
+    for (let i = 0; i < 200; i++) playback.update?.({ dt: 1 / 60, elapsed: 0, frame: i });
+    expect(store.getState()).toMatchObject({ progress: 0, playing: true });
+
+    store.getState().setMovement(someMovement, 'local');
+    expect(store.getState()).toMatchObject({ progress: 0, playing: true });
+    expect(playback.isAnimating?.()).toBe(true);
+    playback.update?.({ dt: 0.25, elapsed: 0, frame: 200 });
+    expect(store.getState().progress).toBeCloseTo(0.1, 12);
   });
 
   it('does not touch progress while paused (the scrubber owns it)', () => {

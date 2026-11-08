@@ -2,9 +2,9 @@
  * Synthetic pit terrain (core/terrain.ts). Triangle packing: engine/__tests__/terrainGeometry.test.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { BLAST_CONFIGS, getBlastConfig } from '../blasts';
-import { generateBlockModel } from '../blockModel';
-import { createFootprint, modelColumnMask } from '../footprint';
+import { STANDARD_BLASTS, getBlastConfig } from '../blasts';
+import { generateBlockModel, type BlockModelConfig } from '../blockModel';
+import { createFootprint, floorMargin, modelColumnMask } from '../footprint';
 import { computeMovement, computeMovementDetailed } from '../movement';
 import { BERM_WIDTH, buildPitTerrain, FACE_ANGLE_DEG, FLOOR_WIDTH, type PitTerrain } from '../terrain';
 import type { BlastParameters, BlockModel } from '../types';
@@ -80,7 +80,7 @@ describe('buildPitTerrain', () => {
     expect(Array.from(again.height)).toEqual(Array.from(terrain.height));
     expect(Array.from(again.mask)).toEqual(Array.from(terrain.mask));
     expect(terrain.spacing).toBe(1.25);
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const t = buildPitTerrain(generateBlockModel(c), 'east');
       const b = c.grid.blockSize[0];
       const ratio = Math.max(t.spacing / b, b / t.spacing);
@@ -134,7 +134,7 @@ describe('buildPitTerrain', () => {
   });
 
   it('every block of the default movement rests on floor, not inside the terrain', () => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m: BlockModel = generateBlockModel(c);
       const t = buildPitTerrain(m, 'east');
       const mv = computeMovement(m, c.defaultParams);
@@ -155,7 +155,7 @@ describe('buildPitTerrain', () => {
   ];
 
   it.each(EXTREMES)('every settled block sits on the floor over its whole swollen footprint (%s)', (_name, over) => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m = generateBlockModel(c);
       const params = { ...c.defaultParams, ...over };
       const t = buildPitTerrain(m, params.freeFace);
@@ -175,7 +175,7 @@ describe('buildPitTerrain', () => {
   });
 
   it.each(EXTREMES)('no block meets the terrain in flight: animated boxes clear it at every progress (%s)', (_name, over) => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m = generateBlockModel(c);
       const params = { ...c.defaultParams, ...over };
       const t = buildPitTerrain(m, params.freeFace);
@@ -205,8 +205,64 @@ describe('buildPitTerrain', () => {
     }
   });
 
+  describe('small blocks: a coarser terrain whose cells span several block columns (Codex review)', () => {
+    // 0.5 m blocks → 1.5 m terrain cells. The blast's south side edge is y = 9.5: the terrain cell
+    // y ∈ [9, 10.5] holds one free block row (9 – 9.5) while its centre (9.75) is bench rock.
+    const small: BlockModelConfig = {
+      ...cfg,
+      grid: { origin: [0, 0, 1030], blockSize: [0.5, 0.5, 0.5], nx: 40, ny: 40, nz: 4 },
+      outline: [
+        [0, 0],
+        [20, 0],
+        [20, 9.5],
+        [0, 9.5],
+      ],
+    };
+    const m = generateBlockModel(small);
+    const t = buildPitTerrain(m, 'east');
+    const z0 = 1030;
+
+    it('uses a 1.5 m spacing (a whole number of 0.5 m blocks)', () => {
+      expect(t.spacing).toBe(1.5);
+      expect(floorMargin(m.grid)).toBe(1.5);
+    });
+
+    it('free ground plus the full floor margin is flat floor, even where a cell is only partly free', () => {
+      const margin = floorMargin(m.grid);
+      // Just beyond the free edge, within the margin: floor (a centre-only seed test stops at 10.5).
+      for (const x of [3, 10, 17]) {
+        for (const y of [9.6, 10.4, 10.9, 9.5 + 0.98 * margin]) {
+          const [, hi] = surfaceRange(t, x - 0.01, y - 0.01, x + 0.01, y + 0.01);
+          expect(hi, `${x},${y}`).toBeLessThanOrEqual(z0 + 1e-6);
+        }
+      }
+      // Beyond the margin the bench rock rises again.
+      expect(heightAt(t, 10, 9.5 + margin + 2.5)).toBeGreaterThan(z0 + 1);
+    });
+
+    it('blocks clear the terrain settled and in flight at default and extreme parameters', () => {
+      const [bx, by, bz] = m.grid.blockSize;
+      for (const over of [{}, { maxThrow: 25, swellFactor: 1.6, reposeAngleDeg: 25, lateralFan: 5, lateralSigma: 5, randomness: 1 }]) {
+        const { result: mv, stats } = computeMovementDetailed(m, { ...cfg.defaultParams, ...over });
+        expect(stats.pathFallbacks).toBe(0);
+        const k = mv.looseScale;
+        for (let n = 0; n < m.count; n += 7) {
+          const o = 3 * n;
+          for (const sv of [0.25, 0.5, 0.75, 1]) {
+            const g = 1 + (k - 1) * sv;
+            const x = mv.start[o] + (mv.end[o] - mv.start[o]) * sv;
+            const y = mv.start[o + 1] + (mv.end[o + 1] - mv.start[o + 1]) * sv;
+            const bottom = mv.start[o + 2] + (mv.end[o + 2] - mv.start[o + 2]) * sv - (bz / 2) * g;
+            const [, hi] = surfaceRange(t, x - (bx / 2) * g + 1e-3, y - (by / 2) * g + 1e-3, x + (bx / 2) * g - 1e-3, y + (by / 2) * g - 1e-3, 4);
+            if (hi > bottom + 1e-3) expect.fail(`block ${n} at s=${sv}: terrain ${hi.toFixed(2)} above ${bottom.toFixed(2)}`);
+          }
+        }
+      }
+    });
+  });
+
   it('the surveyed area (mask) covers the blast and its muckpile; the edge is irregular', () => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m = generateBlockModel(c);
       const t = buildPitTerrain(m, 'east');
       const mv = computeMovement(m, { ...c.defaultParams, maxThrow: 25 });

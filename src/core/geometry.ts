@@ -26,6 +26,56 @@ export function pointInPolygon(x: number, y: number, polygons: readonly (readonl
   return inside;
 }
 
+/**
+ * A fast point-in-polygon test with exactly pointInPolygon's answers (same even–odd crossing rule,
+ * same arithmetic per edge). Edges are bucketed into horizontal bands; a ray toward +x from (x, y)
+ * can only cross edges whose y-range contains y, and all of those sit in y's band, so each query
+ * looks at a handful of edges instead of every vertex of a dig line with thousands of them.
+ */
+export function createPolygonTester(polygons: readonly (readonly (readonly Vec2[])[])[]): (x: number, y: number) => boolean {
+  const xi: number[] = [];
+  const yi: number[] = [];
+  const xj: number[] = [];
+  const yj: number[] = [];
+  for (const poly of polygons)
+    for (const ring of poly) {
+      const n = ring.length;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        xi.push(ring[i][0]);
+        yi.push(ring[i][1]);
+        xj.push(ring[j][0]);
+        yj.push(ring[j][1]);
+      }
+    }
+  const edges = xi.length;
+  if (edges === 0) return () => false;
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  for (let e = 0; e < edges; e++) {
+    y0 = Math.min(y0, yi[e], yj[e]);
+    y1 = Math.max(y1, yi[e], yj[e]);
+  }
+  const nBands = Math.max(1, Math.min(4096, Math.ceil(Math.sqrt(edges) * 2)));
+  const h = (y1 - y0) / nBands || 1;
+  const bandOf = (y: number) => Math.min(nBands - 1, Math.max(0, Math.floor((y - y0) / h)));
+  const bands: number[][] = Array.from({ length: nBands }, () => []);
+  for (let e = 0; e < edges; e++) {
+    const lo = bandOf(Math.min(yi[e], yj[e]));
+    const hi = bandOf(Math.max(yi[e], yj[e]));
+    for (let b = lo; b <= hi; b++) bands[b].push(e);
+  }
+  return (x, y) => {
+    if (y < y0 || y > y1) return false;
+    let inside = false;
+    for (const e of bands[bandOf(y)]) {
+      const a = yi[e];
+      const c = yj[e];
+      if (a > y !== c > y && x < ((xj[e] - xi[e]) * (y - a)) / (c - a) + xi[e]) inside = !inside;
+    }
+    return inside;
+  };
+}
+
 /** Signed shoelace area (m²): positive for counter-clockwise rings (x east, y north). */
 export function ringSignedArea(ring: readonly Vec2[]): number {
   let s = 0;

@@ -24,7 +24,8 @@ Media to capture in a browser (not yet recorded); add the image links once the f
 
 - **Before / after block model.** Three seeded demo blasts with irregular outlines (a ragged face,
   an L-shape, a notched bench): 3,200 and 3,088 blocks of 2.5 m, and a dense 27,088-block blast of
-  1.25 m blocks. Press **Blast** or scrub the timeline: every block follows its own movement vector
+  1.25 m blocks, plus a **scale blast of 2,074,720 blocks** (0.5 m blocks across a 220 m bench; see
+  [Performance](#performance)). Press **Blast** or scrub the timeline: every block follows its own movement vector
   out from the free face, the rock swells and slumps.
 - **Gold veins.** The ore is a set of meandering, dipping veins: a narrow high-grade core inside a
   wider low-grade halo, patchy along strike (ore shoots and barren gaps), pinching out at their
@@ -133,20 +134,24 @@ npm run build && npm run start   # production build
 
 Model and movement travel as **BMV1**, a small binary, columnar (struct-of-arrays) format shared by
 server and client (`src/core/codec.ts`): magic `BMV1`, a uint32 header length, a JSON header
-(`schemaVersion`, `kind`, `count`, field table and metadata), then 4-byte-aligned Float32, Uint32
-and Uint8 sections. Models are **sparse**: only blocks inside the blast outline are sent, each with
-its grid cell index (`cell`, Uint32, strictly increasing; schema v2). Decode returns typed-array **views** on the response buffer (no per-block objects, no
-copies), which go straight into GPU attributes. Malformed payloads throw typed `CodecError`s.
+(`schemaVersion`, `kind`, `count`, field table and metadata), then 4-byte-aligned Float32, Uint32,
+Uint16 and Uint8 sections. Models are **sparse**: only blocks inside the blast outline are sent,
+each with its grid cell index (`cell`, Uint32, strictly increasing). Schema v3 is **compact**: a
+field that can be derived (centroid from `cell`, density and tonnes from the rock type, class from
+the grade, a final position from its post-blast slot) is sent only if deriving it would not
+reproduce it bit for bit, which the encoder checks, so a round trip is always exact. Sent sections
+decode to typed-array **views** on the response buffer, which go straight into GPU attributes.
+Malformed payloads throw typed `CodecError`s.
 
-Measured response sizes:
+Payloads travel **gzipped, as a gzip file** (`application/gzip`): Next.js route handlers drop a
+`Content-Encoding` header, so the client (`ApiDataSource`) inflates the body itself.
 
-| Payload | 3,200 blocks | 27,088 blocks |
-|---|---|---|
-| Model (`centroid, grade, density, tonnes, cell, rockType, oreClass`) | 96,680 B | 813,336 B |
-| Movement (`end, delay, surface.height`; `start`, `displacement` and `distance` are derived on decode) | 64,036 B | 479,920 B |
+Measured sizes (raw / gzipped):
 
-These are uncompressed: `next start` does not gzip `application/octet-stream` (gzip would make
-them about 4× smaller; still open for the deploy).
+| Payload | 3,200 blocks | 27,088 blocks | 2,074,720 blocks |
+|---|---|---|---|
+| Model (`grade, cell, rockType`: 9 B/block) | 29 kB | 244 kB | 18.7 MB / 12.9 MB |
+| Movement (`delay, slotCell, slotLevel, surface.height`: 10 B/block) | 45 kB | 318 kB | 21.5 MB / 12.8 MB |
 
 ## API
 
@@ -155,8 +160,8 @@ them about 4× smaller; still open for the deploy).
 | `GET /api/health` | `{ ok: true, version }` | `no-store` |
 | `GET /api/blasts` | `BlastSummary[]` | `public, s-maxage=3600` |
 | `GET /api/blasts/:id` | `BlastDetail` (grid, grades, pattern, holes, default params) | `public, s-maxage=3600` |
-| `GET /api/blasts/:id/model?v=…` | BMV1 model, `ETag` = model configHash | `public, s-maxage=31536000, immutable` |
-| `GET /api/blasts/:id/movement?freeFace=…&maxThrow=…&…&seed=…&v=…` | BMV1 movement, `ETag` = paramsHash | `public, s-maxage=31536000, immutable` |
+| `GET /api/blasts/:id/model?v=…` | gzipped BMV1 model, `ETag` = model configHash | `public, s-maxage=31536000, immutable` |
+| `GET /api/blasts/:id/movement?freeFace=…&maxThrow=…&…&seed=…&v=…` | gzipped BMV1 movement, `ETag` = paramsHash | `public, s-maxage=31536000, immutable` |
 
 Errors are typed JSON (`{ error: { code, message, details? } }`, always `no-store`): `NOT_FOUND`
 404, `INVALID_PARAMS` 400 (zod, with per-field details), `STALE_VERSION` 409, `INTERNAL` 500.
@@ -187,7 +192,9 @@ a `listBlasts` or `getBlast` result that arrives after the pipeline has moved on
 rather than aborted.
 
 - `ApiDataSource` fetches and decodes BMV1 (10 s timeout).
-- `LocalDataSource` runs the same `src/core` code in the browser; results are byte-identical.
+- `LocalDataSource` runs the same `src/core` code in the browser, in a **Web Worker**
+  (`src/data/compute.worker.ts`), so even the 2-million-block blast never freezes the page;
+  results are byte-identical to the API's.
 - `FallbackDataSource` tries the API on **every** call and serves that call locally on a network
   error, non-2xx, decode error or timeout (never on an abort), so the app recovers by itself.
 - The load pipeline aborts superseded loads and ignores their late results and errors. It applies
@@ -262,19 +269,42 @@ Reconciliation runs on the client: it is cheap and has to follow every parameter
 
 ## Performance
 
-- **Movement compute:** about 4–6 ms for the 3,200-block blasts and 40 ms for 27,088 blocks
-  (measured during development; the free-path checks on every destination are most of it).
-  Building the pit terrain (~33k vertices, ~48k triangles) takes about 20–25 ms, once per blast. An API movement round trip on a cold seed took 16–42 ms end to end locally.
-- **Draw calls:** one per layer. The blocks are **one** draw call at any block count and the holes
-  one, plus the terrain and the two dig lines.
-- **Per-frame CPU while scrubbing or playing:** the `uProgress` and `uOpacity` uniform writes.
-- **Frame rate:** measured with the FPS overlay during playback in the development test browser
-  (an embedded Chromium pane on an Apple M4 Pro, 581 × 859 px at DPR 1, whose
-  `requestAnimationFrame` is capped at about 50 Hz even on an idle page): **both the 3,840-block
-  and the 30,720-block (370k triangles) blasts ran at that cap**, 5 draw calls each (measured
-  before the irregular outlines, which only reduced the block counts). That shows
-  the engine keeps up with the display, not its ceiling; press **FPS** to measure on your own
-  machine and display.
+Measured during development on an Apple M4 Pro (Node for core, the embedded Chromium test pane for
+the browser; that pane caps `requestAnimationFrame` at about 50 Hz, so "at the cap" means the engine
+kept up with the display, not its ceiling). Press **FPS** to measure on your own machine.
+
+| | 3,200 blocks | 27,088 blocks | **2,074,720 blocks** |
+|---|---|---|---|
+| Generate the model (server once, or the worker) | 3 ms | 16 ms | 1.1 s |
+| Movement (server per parameter change, or the worker) | 2–5 ms | 21 ms | 1.7 s |
+| Dig lines + reconciliation (client) | 1 ms | 3 ms | 0.3 s |
+| Triangles (blocks + terrain) | 68 k | 214 k | 12.6 M |
+| Playback | at the cap | at the cap | **at the cap**, 5 draw calls |
+| Click to inspect (CPU picking) | < 1 ms | 1 ms | 60–70 ms |
+
+Loading the scale blast from the API took 1.8 s end to end. A parameter change took 3.3 s: 2.7 s on
+the server, and a longest main-thread task of 0.3 s. With local compute the page's longest
+main-thread task stayed at 0.3 s (the generation and movement run in the worker).
+
+What makes 2 million blocks work:
+
+- **Reconciliation** tests each distinct plan position once (a column in situ, a stack after the
+  blast), with a point-in-polygon test whose edges are bucketed into horizontal bands. That took it
+  from 65 s to 0.24 s at 2 M blocks, with identical answers.
+- **Movement** answers "is this rectangle free ground?" in O(1) from a summed-area table of rock
+  cells, and checks a block's whole throw against one bounding box first, so most free-path checks
+  are a single lookup (4.3 s → 1.7 s).
+- **Generation** computes each vein's plan geometry once per column and skips the vein noise far
+  from every vein, where its contribution is below Float32 resolution (2.1 s → 1.1 s). That left the
+  four demo blasts byte-identical, but it can flip a Float32 rounding that sits on a boundary (one
+  block of one test seed did), so the generator version was bumped and a golden test pins grades
+  to it.
+- **Rendering**: each block is three faces turned toward the camera in the vertex shader (a box never
+  shows more than three), so 2 M blocks are 12.5 M triangles instead of 25 M, still one draw call.
+  The terrain mesh uses a whole multiple of a small block size (62 k vertices instead of 549 k).
+- **Transport**: the compact codec and gzip shrink the scale blast from 96 MB to 26 MB.
+- **Per-frame CPU while scrubbing or playing:** the `uProgress` and `uOpacity` uniform writes, at any
+  block count.
 
 ## Scaling to real block models (millions of blocks)
 
@@ -283,8 +313,10 @@ Reconciliation runs on the client: it is cheap and has to follow every parameter
   detail it needs.
 - **Interior culling.** Most blocks of a solid bench are hidden. Send and draw only the exposed
   shell of each tile, and re-expose blocks when a section or filter changes.
-- **Workers.** Decode, classification and reconciliation run in Web Workers with transferable
-  typed arrays, so the main thread only uploads buffers.
+- **More in workers.** Local compute already runs in a Web Worker; decode, dig lines and
+  reconciliation (0.3 s at 2 M blocks) could follow, with transferable typed arrays.
+- **Spatial index for picking.** A click is a brute-force ray test (60–70 ms at 2 M blocks); a
+  uniform grid over the settled positions would make it constant time.
 - **WebGPU / compute.** Per-block easing, classification and culling move to compute shaders, with
   WebGL kept as the fallback.
 - **Async job API for a real engine.** A real movement engine is slow and stateful: submit a job

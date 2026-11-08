@@ -26,17 +26,42 @@ import {
   type InstancePack,
 } from './blocksAttributes';
 
-/** Instanced unit box with the five owned instance attributes. */
+/**
+ * Three faces of a unit box (+x, +y, +z: 12 vertices, 6 triangles). An axis-aligned box never shows
+ * more than three faces to a camera, so the vertex shader turns each one toward the camera (a 180°
+ * rotation, never a mirror, so the winding and back-face culling stay right): half the triangles
+ * of a full box for the same image.
+ */
+export function cameraFacingBox(): { position: Float32Array; normal: Float32Array; index: Uint16Array } {
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  const pos = box.getAttribute('position').array as Float32Array;
+  const nor = box.getAttribute('normal').array as Float32Array;
+  const idx = box.getIndex()!.array as ArrayLike<number>;
+  // BoxGeometry face order: +x, −x, +y, −y, +z, −z; 4 vertices and 6 indices each.
+  const faces = [0, 2, 4];
+  const position = new Float32Array(12 * 3);
+  const normal = new Float32Array(12 * 3);
+  const index = new Uint16Array(18);
+  faces.forEach((f, q) => {
+    position.set(pos.subarray(f * 12, f * 12 + 12), q * 12);
+    normal.set(nor.subarray(f * 12, f * 12 + 12), q * 12);
+    for (let k = 0; k < 6; k++) index[q * 6 + k] = idx[f * 6 + k] - f * 4 + q * 4;
+  });
+  box.dispose();
+  return { position, normal, index };
+}
+
+/** Instanced camera-facing box with the five owned instance attributes. */
 export function buildBlocksGeometry(
   pack: InstancePack,
   colours: Float32Array,
   ore: Float32Array = new Float32Array(pack.count),
 ): THREE.InstancedBufferGeometry {
   const geometry = new THREE.InstancedBufferGeometry();
-  const box = new THREE.BoxGeometry(1, 1, 1);
-  geometry.setIndex(box.getIndex());
-  geometry.setAttribute('position', box.getAttribute('position'));
-  geometry.setAttribute('normal', box.getAttribute('normal'));
+  const box = cameraFacingBox();
+  geometry.setIndex(new THREE.BufferAttribute(box.index, 1));
+  geometry.setAttribute('position', new THREE.BufferAttribute(box.position, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(box.normal, 3));
   geometry.setAttribute('aStart', new THREE.InstancedBufferAttribute(pack.start, 3));
   geometry.setAttribute('aEnd', new THREE.InstancedBufferAttribute(pack.end, 3));
   geometry.setAttribute('aDelay', new THREE.InstancedBufferAttribute(pack.delay, 1));

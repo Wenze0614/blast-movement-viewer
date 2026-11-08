@@ -6,6 +6,7 @@
  * | b1040-017 | 40×24×4 @ 2.5 m           | irregular, ragged face     | branching vein across the throw  |
  * | b1030-022 | 40×24×4 @ 2.5 m           | L-shape (narrow back)      | two veins, waste parting between |
  * | b1040-031 | 80×48×8 @ 1.25 m          | notched, chamfered corner  | vein network + high-grade shoot  |
+ * | b1050-001 | 440×260×20 @ 0.5 m        | ragged, 220 × 130 m        | vein network (~2.07 M blocks)    |
  *
  * Veins (orebody.ts VeinFeature): a high-grade core inside a low-grade halo, patchy along strike,
  * meandering, pinching out past their traces; a splay starting on another vein reads as a branch.
@@ -109,9 +110,37 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
     pattern: PATTERN_100x60,
     defaultParams: { ...DEFAULT_BLAST_PARAMETERS },
   },
+  {
+    id: 'b1050-001',
+    name: 'Bench 1050 · Blast 001 (scale)',
+    description: 'Large blast in 0.5 m blocks (about 2 million): a vein network across a 220 m bench',
+    freeFace: 'east',
+    grid: { origin: [0, 0, 1040], blockSize: [0.5, 0.5, 0.5], nx: 440, ny: 260, nz: 20 },
+    grades: { ...DEFAULT_GRADE_SETTINGS },
+    seed: 1050001,
+    outline: [[8, 6], [70, 0], [150, 4], [220, 2], [216, 40], [220, 92], [212, 130], [140, 124], [96, 130], [40, 122], [4, 96], [0, 50]],
+    orebody: {
+      ...BASE_OREBODY,
+      features: [
+        { ...VEIN, trace: [[110, -10], [124, 40], [130, 85], [146, 140]], zRef: 1045, dipDeg: 64, halfThickness: 2.6, peakGrade: 4.5, halo: { halfWidth: 7, grade: 0.75 }, wander: 4, wanderLength: 22, patchiness: 0.65 },
+        { ...VEIN, trace: [[124, 40], [170, 52], [212, 60]], zRef: 1045, dipDeg: 72, halfThickness: 1.8, peakGrade: 3.6, halo: { halfWidth: 5, grade: 0.65 }, wander: 3, wanderLength: 18, patchiness: 0.55 },
+        { ...VEIN, trace: [[130, 85], [90, 100], [40, 118]], zRef: 1045, dipDeg: 70, halfThickness: 1.9, peakGrade: 3.6, halo: { halfWidth: 5, grade: 0.65 }, wander: 3, wanderLength: 18, patchiness: 0.55 },
+        { ...VEIN, trace: [[40, -5], [52, 40], [60, 80]], zRef: 1045, dipDeg: 66, halfThickness: 2.2, peakGrade: 4, halo: { halfWidth: 6, grade: 0.7 }, wander: 3, wanderLength: 20, patchiness: 0.6 },
+        { kind: 'pod', centre: [128, 62, 1046], radii: [5, 8, 6], rotationDeg: 10, peakGrade: 6.5 },
+      ],
+    },
+    pattern: { burden: 5, spacing: 5.8, holeDiameterMm: 165, subdrill: 1.2, rows: 44, holesPerRow: 22 },
+    defaultParams: { ...DEFAULT_BLAST_PARAMETERS, maxThrow: 14 },
+  },
 ];
 
 export const DEFAULT_BLAST_CONFIG_ID = 'b1040-017';
+
+/** The ~2 million-block scale demo (README "Performance"): heavy, so tests use it on purpose only. */
+export const SCALE_BLAST_ID = 'b1050-001';
+
+/** The everyday demo blasts (thousands to tens of thousands of blocks). */
+export const STANDARD_BLASTS: readonly BlastConfig[] = BLAST_CONFIGS.filter((c) => c.id !== SCALE_BLAST_ID);
 
 export function getBlastConfig(id: string): BlastConfig | undefined {
   return BLAST_CONFIGS.find((c) => c.id === id);

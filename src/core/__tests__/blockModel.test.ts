@@ -3,7 +3,7 @@
  * core/blockModel.ts, core/blasts.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { BLAST_CONFIGS, DEFAULT_BLAST_CONFIG_ID, getBlastConfig } from '../blasts';
+import { STANDARD_BLASTS, DEFAULT_BLAST_CONFIG_ID, getBlastConfig } from '../blasts';
 import {
   blockIdAt,
   blockModelConfigHash,
@@ -13,8 +13,10 @@ import {
   configBlockCount,
   generateBlockModel,
   getBlock,
+  MODEL_GENERATOR_VERSION,
   oreTonnesFraction,
 } from '../blockModel';
+import { fnv1a64 } from '../hash';
 import { DEFAULT_GRADE_SETTINGS } from '../defaults';
 import { pointInRing } from '../geometry';
 import { OreClass, RockType } from '../types';
@@ -83,7 +85,7 @@ describe('generateBlockModel (M1)', () => {
     expect(block.size).toEqual([2.5, 2.5, 2.5]);
   });
 
-  it.each(BLAST_CONFIGS.map((c) => c.id))('ore (grade >= cutoff 0.5 g/t) is 15–30%% of total tonnes for %s', (id) => {
+  it.each(STANDARD_BLASTS.map((c) => c.id))('ore (grade >= cutoff 0.5 g/t) is 15–30%% of total tonnes for %s', (id) => {
     const frac = oreTonnesFraction(generateBlockModel(getBlastConfig(id)!));
     expect(frac).toBeGreaterThanOrEqual(0.15);
     expect(frac).toBeLessThanOrEqual(0.3);
@@ -108,7 +110,7 @@ describe('generateBlockModel (M1)', () => {
   });
 
   it('every array has the right length (centroid 3N, scalars N)', () => {
-    for (const cfg of BLAST_CONFIGS) {
+    for (const cfg of STANDARD_BLASTS) {
       const m = generateBlockModel(cfg);
       const n = configBlockCount(cfg);
       expect(m.count).toBe(n);
@@ -117,7 +119,7 @@ describe('generateBlockModel (M1)', () => {
     }
   });
 
-  it.each(BLAST_CONFIGS.map((c) => c.id))(
+  it.each(STANDARD_BLASTS.map((c) => c.id))(
     'sparse %s: blocks fill exactly the columns inside the outline, every flitch, cells strictly increasing',
     (id) => {
       const cfg = getBlastConfig(id)!;
@@ -173,10 +175,10 @@ describe('generateBlockModel (M1)', () => {
 
 describe('demo blasts (ADR-10)', () => {
   it('has the three demo blasts with the planned grids', () => {
-    expect(BLAST_CONFIGS.map((c) => c.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
-    const boxes = BLAST_CONFIGS.map((c) => c.grid.nx * c.grid.ny * c.grid.nz);
+    expect(STANDARD_BLASTS.map((c) => c.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
+    const boxes = STANDARD_BLASTS.map((c) => c.grid.nx * c.grid.ny * c.grid.nz);
     expect(boxes).toEqual([3840, 3840, 30720]);
-    expect(BLAST_CONFIGS.map((c) => configBlockCount(c))).toEqual([3200, 3088, 27088]);
+    expect(STANDARD_BLASTS.map((c) => configBlockCount(c))).toEqual([3200, 3088, 27088]);
     const dense = getBlastConfig('b1040-031')!.grid;
     expect([dense.nx, dense.ny, dense.nz, ...dense.blockSize]).toEqual([80, 48, 8, 1.25, 1.25, 1.25]);
     expect(getBlastConfig('nope')).toBeUndefined();
@@ -196,5 +198,32 @@ describe('demo blasts (ADR-10)', () => {
     expect(colMax(40, 22)).toBeGreaterThan(1.5);
     expect(colMax(72, 37)).toBeGreaterThan(1.5);
     expect(colMax(56, 29.5)).toBeLessThan(0.5);
+  });
+});
+
+describe('generator version guard (ADR-12: same configHash ⇒ same bytes)', () => {
+  /**
+   * Golden grade hashes for MODEL_GENERATOR_VERSION. If generated grades change for the same
+   * config, this fails: bump MODEL_GENERATOR_VERSION (so every configHash and cached response
+   * changes) and update the goldens together. v4 = the per-column vein cache and noise cut-offs,
+   * which flip a few Float32 roundings, e.g. b1040-031 at seed 19, block 3450:
+   * 0.1121239885687828 (v3) → 0.11212398111820221 (v4).
+   */
+  const hex = (a: Float32Array) => Array.from(new Uint8Array(a.buffer, a.byteOffset, a.byteLength), (b) => b.toString(16).padStart(2, '0')).join('');
+  const GOLDEN = {
+    version: 4,
+    'b1040-017': '53e6774a6958f2d8',
+    'b1040-031@19': '2919494c6afda5da',
+    'b1040-031': 'cf78fe9d722c1e97',
+  };
+
+  it('grades match the goldens of the current generator version', () => {
+    expect(MODEL_GENERATOR_VERSION).toBe(GOLDEN.version);
+    const dense = getBlastConfig('b1040-031')!;
+    expect(fnv1a64(hex(generateBlockModel(cfg017).grade))).toBe(GOLDEN['b1040-017']);
+    expect(fnv1a64(hex(generateBlockModel(dense).grade))).toBe(GOLDEN['b1040-031']);
+    const seed19 = generateBlockModel({ ...dense, seed: 19 });
+    expect(fnv1a64(hex(seed19.grade))).toBe(GOLDEN['b1040-031@19']);
+    expect(seed19.grade[3450]).toBe(Math.fround(0.11212398111820221));
   });
 });

@@ -22,11 +22,11 @@ afterEach(() => {
 });
 
 describe('BlastPicker', () => {
-  it('lists the three demo blasts and writes store.blastId', () => {
+  it('lists the four demo blasts and writes store.blastId', () => {
     appStore.setState({ blasts });
     render(<BlastPicker />);
     const select = screen.getByRole('combobox', { name: /Blast/ }) as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['b1040-017', 'b1030-022', 'b1040-031', 'b1050-001']);
     expect(select.options[2].textContent).toContain('27,088 blocks');
     fireEvent.change(select, { target: { value: 'b1040-031' } });
     expect(appStore.getState().blastId).toBe('b1040-031');

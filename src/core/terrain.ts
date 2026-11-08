@@ -12,10 +12,10 @@
  *     wander along strike;
  *   - a little seeded roughness, never above the nominal level, and an irregular surveyed edge.
  *
- * Floor guarantee: free ground's edges lie on block boundaries and the vertex spacing divides the
- * block size, so every terrain cell is wholly free or wholly not. Every terrain cell within one
- * cell (8-neighbour) of a free cell is flat floor, so the floor covers free ground plus a margin
- * of one spacing (`floorMargin`) all round, and walls rise only beyond it. Movement keeps every
+ * Floor guarantee: free ground's edges lie on block boundaries, and the vertex grid is commensurate
+ * with the block grid (`floorMargin`). A terrain cell holding ANY free ground is a floor seed, and
+ * every terrain cell within one cell (8-neighbour) of a seed is flat floor, so the floor covers
+ * free ground plus a margin of at least one spacing all round, and walls rise only beyond it. Movement keeps every
  * block's animated box within that margin of free ground (footprint.pathIsFree), so no block
  * meets the terrain, settled or in flight. The surveyed edge contains all of free ground.
  *
@@ -102,14 +102,22 @@ export function buildPitTerrain(model: BlockModel, face: FreeFace): PitTerrain {
   const rough = createSeededNoise3D(deriveSeed(model.seed, 'terrain/rough'));
   const wander = createSeededNoise3D(deriveSeed(model.seed, 'terrain/walls'));
   const edge = createSeededNoise3D(deriveSeed(model.seed, 'terrain/edge'));
-  // Floor cells: free terrain cells (tested at their centres; exact, see above) dilated by one cell.
+  // Floor seeds: terrain cells holding any free ground. Free-ness is uniform within a block cell,
+  // so testing the centre of every block cell inside the terrain cell (one sample when the
+  // terrain cell nests inside a block cell) is exact. Seeds dilated by one cell are floor.
   const cx = nx - 1;
   const cy = ny - 1;
+  const sub = Math.max(1, Math.round(spacing / Math.min(grid.blockSize[0], grid.blockSize[1])));
   const free = new Uint8Array(cx * cy);
   for (let j = 0; j < cy; j++)
     for (let i = 0; i < cx; i++) {
-      const [a, b] = frame.toLocal(ox + (i + 0.5) * spacing, oy + (j + 0.5) * spacing);
-      free[i + cx * j] = fp.isFree(a, b) ? 1 : 0;
+      let any = 0;
+      for (let v = 0; v < sub && !any; v++)
+        for (let u = 0; u < sub && !any; u++) {
+          const [a, b] = frame.toLocal(ox + (i + (u + 0.5) / sub) * spacing, oy + (j + (v + 0.5) / sub) * spacing);
+          if (fp.isFree(a, b)) any = 1;
+        }
+      free[i + cx * j] = any;
     }
   const floorCell = new Uint8Array(cx * cy);
   for (let j = 0; j < cy; j++)

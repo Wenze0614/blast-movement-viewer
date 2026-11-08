@@ -205,3 +205,29 @@ describe('dig-line segments', () => {
     expect(digLineElevation({ ...grid, nz: 4 })).toBeCloseTo(1040.15, 9);
   });
 });
+
+describe('cameraFacingBox (half the triangles of a box)', () => {
+  it('holds the +x, +y and +z faces of the unit box: 12 vertices, 6 triangles, wound counter-clockwise from outside', async () => {
+    const { cameraFacingBox } = await import('../systems/blocks');
+    const { position, normal, index } = cameraFacingBox();
+    expect(position.length).toBe(36);
+    expect(index.length).toBe(18);
+    const v = (i: number) => [position[3 * i], position[3 * i + 1], position[3 * i + 2]];
+    for (let q = 0; q < 3; q++) {
+      for (let k = 0; k < 4; k++) {
+        const i = q * 4 + k;
+        const n = [normal[3 * i], normal[3 * i + 1], normal[3 * i + 2]];
+        expect(n).toEqual([0, 1, 2].map((a) => (a === q ? 1 : 0)));
+        expect(v(i)[q]).toBe(0.5); // on the + face of its axis
+      }
+    }
+    for (let t = 0; t < 18; t += 3) {
+      const [a, b, c] = [v(index[t]), v(index[t + 1]), v(index[t + 2])];
+      const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      const cross = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      const n = [normal[3 * index[t]], normal[3 * index[t] + 1], normal[3 * index[t] + 2]];
+      expect(cross[0] * n[0] + cross[1] * n[1] + cross[2] * n[2]).toBeGreaterThan(0); // front face outward
+    }
+  });
+});

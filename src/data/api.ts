@@ -59,6 +59,19 @@ export function movementPath(id: string, params: BlastParameters): string {
   return `/api/blasts/${encodeURIComponent(id)}/movement?${canonicalParamsString(params)}${v ? `&${v}` : ''}`;
 }
 
+/**
+ * The body of a BMV1 response. The API sends payloads gzipped as a gzip file (server/binary.ts),
+ * so they are inflated here; an uncompressed payload (a test double, another server) passes
+ * through. Detected by the gzip magic bytes 1f 8b (a BMV1 payload starts with "BMV1").
+ */
+export async function readPayload(res: Response): Promise<ArrayBuffer> {
+  const buf = await res.arrayBuffer();
+  const head = new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
+  if (head.length < 2 || head[0] !== 0x1f || head[1] !== 0x8b) return buf;
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Response(stream).arrayBuffer();
+}
+
 export class ApiDataSource implements DataSource {
   readonly kind = 'api' as const;
   private readonly baseUrl: string;
@@ -121,7 +134,7 @@ export class ApiDataSource implements DataSource {
       return cached;
     }
     const res = await this.request(modelPath(id), signal);
-    const model = decodeModel(await res.arrayBuffer());
+    const model = decodeModel(await readPayload(res));
     this.models.set(id, model);
     return model;
   }
@@ -129,7 +142,7 @@ export class ApiDataSource implements DataSource {
   async getMovement(id: string, params: BlastParameters, signal?: AbortSignal): Promise<MovementResult> {
     try {
       const [model, res] = await Promise.all([this.getModel(id, signal), this.request(movementPath(id, params), signal)]);
-      return decodeMovement(await res.arrayBuffer(), model);
+      return decodeMovement(await readPayload(res), model);
     } catch (err) {
       // The server's data changed under our cached model (a payload for another model, or our
       // `?v=` is no longer current): drop it so the next getModel refetches.

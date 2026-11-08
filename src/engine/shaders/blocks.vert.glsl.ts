@@ -39,15 +39,29 @@ ${ease}
 void main() {
   float t = bmvBlockProgress(uProgress, aDelay, uDur);
   vec3 p = bmvAnimatedCentroid(aStart, aEnd, t, uArc);
-  vec3 worldPos = position * uBlockSize * mix(1.0, uScaleEnd, t) + p;
+
+  // Camera-facing box (blocks.ts cameraFacingBox): the geometry holds the +x, +y and +z faces;
+  // turn each toward the camera with a 180° rotation (two axes negated), never a mirror, so its
+  // winding stays front-facing. The mesh has no transform, so object space is world space.
+  vec3 toCam = cameraPosition - p;
+  vec3 local = position;
+  vec3 n = normal;
+  if (n.x > 0.5) {
+    if (toCam.x < 0.0) { local.xy = -local.xy; n.x = -1.0; }
+  } else if (n.y > 0.5) {
+    if (toCam.y < 0.0) { local.yz = -local.yz; n.y = -1.0; }
+  } else if (toCam.z < 0.0) {
+    local.zx = -local.zx; n.z = -1.0;
+  }
+  vec3 worldPos = local * uBlockSize * mix(1.0, uScaleEnd, t) + p;
 
   float cut = dot(uSection.xyz, p) < uSection.w ? 1.0 : 0.0;
   vHidden = max(cut, uOreOnly * (1.0 - aOre));
 
   vSelected = abs(float(gl_InstanceID) - uSelected) < 0.5 ? 1.0 : 0.0;
   vColor = aColor;
-  vNormal = normal;   // boxes never rotate: object normal = world normal
-  vLocal = position;
+  vNormal = n;        // boxes never rotate: object normal = world normal
+  vLocal = local;
   gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(worldPos, 1.0);
 }
 `;

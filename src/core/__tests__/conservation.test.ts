@@ -3,7 +3,7 @@
  * the post-blast model keeps total tonnage and metal; only position changes.
  */
 import { describe, expect, it } from 'vitest';
-import { BLAST_CONFIGS, getBlastConfig } from '../blasts';
+import { STANDARD_BLASTS, getBlastConfig } from '../blasts';
 import { blockVolume, generateBlockModel } from '../blockModel';
 import { DEFAULT_BLAST_PARAMETERS } from '../defaults';
 import { columnSums, postBlastPlanGrid } from '../grid2d';
@@ -19,7 +19,7 @@ function sum(a: ArrayLike<number>, f: (v: number, i: number) => number = (v) => 
 }
 
 describe('conservation', () => {
-  it.each(BLAST_CONFIGS.map((c) => c.id))('M1: Σ tonnes = Σ (block volume × density) for the in-situ model (%s)', (id) => {
+  it.each(STANDARD_BLASTS.map((c) => c.id))('M1: Σ tonnes = Σ (block volume × density) for the in-situ model (%s)', (id) => {
     const m = generateBlockModel(getBlastConfig(id)!);
     const v = blockVolume(m.grid);
     // per block exactly (as Float32), hence in total

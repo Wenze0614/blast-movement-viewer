@@ -29,8 +29,8 @@ describe('createDataSource (ADR-9, M10)', () => {
     expect(createDataSource()).toBeInstanceOf(FallbackDataSource);
   });
 
-  it('lists the three demo blasts', async () => {
+  it('lists the four demo blasts', async () => {
     const blasts = await new LocalDataSource().listBlasts();
-    expect(blasts.map((b) => b.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
+    expect(blasts.map((b) => b.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031', 'b1050-001']);
   });
 });

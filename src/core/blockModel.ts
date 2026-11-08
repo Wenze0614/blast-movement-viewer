@@ -44,7 +44,7 @@ export interface BlockModelConfig {
  * change alters generated grades/densities for the SAME config, so cached results keyed on
  * `configHash` (ADR-12 immutable CDN responses) are invalidated.
  */
-export const MODEL_GENERATOR_VERSION = 3;
+export const MODEL_GENERATOR_VERSION = 4;
 
 /**
  * Canonical hash of everything that determines a block model: generator version, grid, grade
@@ -146,7 +146,7 @@ export function generateBlockModel(cfg: BlockModelConfig): BlockModel {
   const rockType = new Uint8Array(count);
   const oreClass = new Uint8Array(count);
 
-  const sampler = createOrebodySampler(orebody, seed);
+  const sampler = createOrebodySampler(orebody, seed, { columns: nx * ny });
   // Iterate in grid-cell order so ids follow the cells and the nugget draws are in a fixed order.
   let id = 0;
   for (let k = 0; k < nz; k++) {
@@ -160,7 +160,7 @@ export function generateBlockModel(cfg: BlockModelConfig): BlockModel {
         centroid[3 * id] = x;
         centroid[3 * id + 1] = y;
         centroid[3 * id + 2] = z;
-        const s = sampler.sample(x, y, z);
+        const s = sampler.sample(x, y, z, i + nx * j);
         const rt = s.indicator >= orebody.mineralisedThreshold ? RockType.Mineralised : RockType.Host;
         const d = rt === RockType.Mineralised ? orebody.density.mineralised : orebody.density.host;
         grade[id] = s.grade;

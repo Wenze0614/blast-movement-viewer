@@ -2,7 +2,7 @@
  * Synthetic blastholes and the BlastSummary / BlastDetail builders (plan §3.2, P9). Display only.
  */
 import { describe, expect, it } from 'vitest';
-import { BLAST_CONFIGS, getBlastConfig } from '../blasts';
+import { STANDARD_BLASTS, getBlastConfig } from '../blasts';
 import { blockIdAt, generateBlockModel } from '../blockModel';
 import { pointInRing } from '../geometry';
 import { BLAST_DISCLAIMER, buildBlastDetail, buildBlastSummary, generateHoles } from '../holes';
@@ -85,7 +85,7 @@ describe('generateHoles', () => {
 
 describe('BlastSummary / BlastDetail builders', () => {
   it('summaries match the demo table', () => {
-    const s = BLAST_CONFIGS.map(buildBlastSummary);
+    const s = STANDARD_BLASTS.map(buildBlastSummary);
     expect(s[0]).toEqual({
       id: 'b1040-017',
       name: 'Bench 1040 · Blast 017',
@@ -96,7 +96,7 @@ describe('BlastSummary / BlastDetail builders', () => {
     });
     expect(s.map((x) => x.blockCount)).toEqual([3200, 3088, 27088]);
     // the summary's count (computed from the outline) is the generated model's
-    expect(s.map((x) => x.blockCount)).toEqual(BLAST_CONFIGS.map((c) => generateBlockModel(c).count));
+    expect(s.map((x) => x.blockCount)).toEqual(STANDARD_BLASTS.map((c) => generateBlockModel(c).count));
     expect(s[1].benchRL).toBe(1020);
   });
 

@@ -1,5 +1,5 @@
 /**
- * Response helpers for the route handlers (docs/02-plan.md §3.2, ADR-11, ADR-12): binary BMV1
+ * Response helpers for the route handlers (docs/02-plan.md §3.2, ADR-11, ADR-12): gzipped BMV1
  * bodies, JSON with a cache policy, typed ApiError bodies, ETag / If-None-Match → 304.
  */
 import type { ApiError, ApiErrorCode } from '@/core/api-types';
@@ -18,7 +18,8 @@ export const CACHE = {
   none: 'no-store',
 } as const;
 
-export const BINARY_TYPE = 'application/octet-stream';
+/** BMV1 payloads travel gzipped, as a gzip file (see `binary`). */
+export const BINARY_TYPE = 'application/gzip';
 
 /** `"<tag>"`: a strong ETag. */
 export const quoteEtag = (tag: string) => `"${tag}"`;
@@ -54,17 +55,26 @@ export function notModified(opts: CacheOptions): Response {
 }
 
 /**
- * A BMV1 payload as `application/octet-stream`, or 304 if the request's If-None-Match already
- * names this ETag.
+ * A gzipped BMV1 payload as `application/gzip`, or 304 if the request's If-None-Match already
+ * names this ETag. The payload is ALWAYS gzipped and labelled as a gzip file rather than sent with
+ * `Content-Encoding: gzip`: Next.js route handlers drop that header (the browser would then not
+ * inflate the body), and `next start` does not compress binary bodies itself. The client inflates
+ * it (data/api.ts); one representation per URL, so the ETag stays strong.
  */
-export function binary(body: Uint8Array<ArrayBuffer>, opts: CacheOptions & { request?: Request }): Response {
+export function binary(gzipped: Uint8Array<ArrayBuffer>, opts: CacheOptions & { request?: Request }): Response {
   if (opts.etag && opts.request && etagMatches(opts.request.headers.get('if-none-match'), opts.etag)) {
     return notModified(opts);
   }
   const headers = cacheHeaders(opts);
   headers.set('Content-Type', BINARY_TYPE);
-  headers.set('Content-Length', String(body.byteLength));
-  return new Response(body, { status: 200, headers });
+  headers.set('Content-Length', String(gzipped.byteLength));
+  return new Response(gzipped, { status: 200, headers });
+}
+
+/** gzip bytes with the web-standard CompressionStream (Node and edge runtimes alike). */
+export async function gzip(body: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const stream = new Blob([body]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 export function json<T>(body: T, cacheControl: string): Response {

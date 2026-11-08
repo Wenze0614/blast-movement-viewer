@@ -33,7 +33,7 @@
 | M1 | Synthetic block model | Deterministic from a seed: same seed gives identical arrays. Default bounding grid 40×24×4 blocks of 2.5 m (3,840 cells, 100×60×10 m bench); the blast outline keeps 3,200 blocks. A dipping ore lens plus noise gives about 15–30% ore by tonnes. Grade classes: waste < 0.5, low 0.5–1.5, high ≥ 1.5 g/t Au. Unit test: Σ tonnes = Σ volume × density. |
 | M2 | Instanced 3D render | **One draw call** for all blocks (check `renderer.info.render.calls`). Grade colours with a legend. Orbit camera. ≥ 55 fps on a typical laptop in Chrome at 3,840 blocks. |
 | M3 | Movement model | Pure function `computeMovement(model, params)`. Unit tests: (a) **no two blocks share a post-blast slot**, (b) **no floating blocks**, (c) tonnes and metal conserved exactly, (d) deterministic per seed, (e) mean horizontal displacement is larger in the top flitch than the bottom one, and larger at the front row than the back row. Runs in < 50 ms for 3,840 blocks. |
-| M4 | Blast animation and scrubber | A "Blast" button animates 0→1 over about 2.5 s with front rows firing first. A slider scrubs in either direction. Per-frame CPU work = **one uniform update**. No popping at t = 0 or 1. |
+| M4 | Blast animation and scrubber | A "Blast" button animates 0→1 over about 2.5 s; blocks start in firing order (front rows first; see ADR-3 step 0). A slider scrubs in either direction. Per-frame CPU work = **one uniform update**. No popping at t = 0 or 1. |
 | M5 | Original dig line | Contoured from the in-situ model with the same algorithm as M6. A bright outline that stays fixed in world space after the blast. |
 | M6 | Adjusted dig line | Contoured from the post-blast model. A different colour and line style, toggleable. |
 | M7 | Reconciliation stats | Three columns: **In-situ / original**, **Post-blast / original**, **Post-blast / adjusted**. Rows: mill t, mill grade, ore loss %, dilution %, Au to mill (oz), plus a delta row. Fixture tests match hand calculations. Formula tooltips. |
@@ -120,9 +120,13 @@
 ### ADR-3: Movement model (heuristic)
 Coordinates are mine-grid metres: x = East, y = North, z = elevation. Bench local frame: **u** = distance from the free face along the throw direction (free face = east, throw = +x). **H** = bench height.
 
+**Step 0: firing sequence** (`core/timing.ts`, since the timing-driven movement)
+- A hole fires at `t = row · rowDelay + steps · holeDelay`: rows = burden bands behind each strip's face; steps = spacing bands from the initiation point (none for `row`; outward from the centre line for `v`; along the row from a front corner for `echelon-left` / `echelon-right`, seen from behind the blast).
+- Burden-relief direction `r̂ = normalise(rowDelay/B, −holeDelay/S · ∂steps/∂y)` (down the firing-time gradient): straight at the face, converging on a V's centre line, diagonal toward an echelon's corner. B, S come from the model's drill pattern (`BlockModel.pattern`).
+
 **Step 1: target plan displacement**
 - s = u / U ∈ [0,1] (0 = front row), h = (z − z_toe)/H ∈ [0,1] (1 = crest)
-- Throw: `T = T_max · [r_back + (1−r_back)(1−s)^p] · [r_toe + (1−r_toe)·h] · (1 + 0.25·R·n₁)`
+- Throw: `T = T_max · [r_back + (1−r_back)(1−s)^p] · [r_toe + (1−r_toe)·h] · (1 + 0.25·R·n₁)`, along r̂
 - Lateral: `L = R·σ_lat·n₂ + fan·((y−y_c)/(W/2))·(1−s)`
 - n₁, n₂ = seeded 3D simplex noise at centroid / ℓ (ℓ ≈ 8 m), so neighbours move coherently.
 - Defaults: T_max = 10 m, r_back = 0.2, p = 1.5, r_toe = 0.4, σ_lat = 1 m, fan = 1 m, R = 0.5. This gives the top flitch ~6–10 m and the bottom ~3–4 m, in the Husab range ⚠️ (single site, used as a sanity check only).
@@ -141,7 +145,7 @@ Coordinates are mine-grid metres: x = East, y = North, z = elevation. Bench loca
 - Repeatedly move the top block of the tallest offending cell to its lowest valid neighbour, until stable or 20·N moves.
 
 **Step 5: animation delay**
-- `aDelay = 0.45·s + 0.05·noise`: front rows fire first. Visual only.
+- `aDelay = 0.45·(t − t_min)/(t_max − t_min) + j·noise`, t = the block's firing time, j = min(0.05, 0.9 × the smallest normalised step between firing times): blocks start strictly in firing order. Visual only.
 
 **Known simplifications (README):**
 - no timing, explosive or rock physics
@@ -283,7 +287,11 @@ export interface DataSource {
 ### ADR-12: Caching, validation and compute placement
 - **Deterministic ⇒ cacheable:** movement is a pure function of (blast config, params), so it's a **GET** with canonicalised query params (fixed key order, rounded to 2 dp). Response: `Cache-Control: public, s-maxage=31536000, immutable` + `ETag = paramsHash`. Repeat slider positions are served from the CDN edge. ⚠️ On the first deploy, check that Vercel's CDN honours this header for Next.js route handlers (look for `x-vercel-cache: HIT`).
 - **Prebuilt models:** the 3 demo model binaries can be generated at build time, either with `generateStaticParams` + `dynamic = 'force-static'` on the model route (⚠️ check this for binary route handlers) or with a prebuild script that writes `public/models/*.bin`.
-- **Validation:** zod schema with ranges:
+- **Validation:** zod schema with ranges (the table lives in `core/params.ts`, shared with the sliders):
+  - `freeFace` east | west | north | south
+  - `initiation` row | v | echelon-left | echelon-right
+  - `rowDelayMs` 5–200 (> 0 so the throw always has a component toward the face)
+  - `holeDelayMs` 0–200
   - `maxThrow` 0–25
   - `backRowRatio` 0–1
   - `throwExponent` 0.5–3
@@ -334,6 +342,7 @@ export interface BlockModel {
   grades: GradeSettings;
   count: number;              // 3200 (b1040-017: 3,840 cells, 3,200 inside the outline)
   cell: Uint32Array;          // count, grid cell index per block
+  pattern: BlastPattern;      // drill pattern: burden/spacing shape the firing sequence
   centroid: Float32Array;     // 3*count, m
   grade: Float32Array;        // g/t Au, e.g. 0.12 .. 6.0
   density: Float32Array;      // t/m³ in situ, e.g. 2.65 waste, 2.75 mineralised
@@ -357,7 +366,10 @@ export interface Block {
 }
 
 export interface BlastParameters {
-  freeFace: 'east' | 'west' | 'north' | 'south'; // MVP fixed: 'east'
+  freeFace: 'east' | 'west' | 'north' | 'south'; // 'east' for the demo blasts
+  initiation: 'row' | 'v' | 'echelon-left' | 'echelon-right'; // firing sequence. 'v'
+  rowDelayMs: number;         // ms between rows (one burden). 42
+  holeDelayMs: number;        // ms between holes along a row, away from the initiation point. 25
   maxThrow: number;           // m, horizontal throw at front row, crest. 10
   backRowRatio: number;       // 0..1, throw at back row as fraction of max. 0.2
   throwExponent: number;      // p in (1-s)^p. 1.5
@@ -458,7 +470,7 @@ export interface BlastSummary {
   freeFace: BlastParameters['freeFace']; // 'east'
 }
 
-export interface BlastPattern {   // DISPLAY ONLY — not used by the movement heuristic
+export interface BlastPattern {   // lays out the hole layer; burden/spacing shape the firing sequence
   burden: number;             // 4.0 m
   spacing: number;            // 4.6 m
   holeDiameterMm: number;     // 115

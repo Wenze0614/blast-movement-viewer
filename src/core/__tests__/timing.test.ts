@@ -8,6 +8,7 @@ import { DEFAULT_BLAST_PARAMETERS, DEFAULT_PATTERN } from '../defaults';
 import { createFootprint, modelColumnMask, modelFootprint } from '../footprint';
 import { buildBlastDetail } from '../holes';
 import { computeMovementDetailed } from '../movement';
+import { completeParams } from '../params';
 import { createFiringField, holeFiringTimes, leftSign } from '../timing';
 import type { BlastParameters, GridSpec, Initiation } from '../types';
 
@@ -136,6 +137,35 @@ describe('movement follows the firing sequence', () => {
     }
   });
 
+  it.each(['row', 'v', 'echelon-left', 'echelon-right'] as const)(
+    '%s: animation starts follow firing order strictly, across every pair of firing-time groups (Codex review)',
+    (init) => {
+      for (const id of ['b1040-017', 'b1030-022', 'b1040-031']) {
+        const c = getBlastConfig(id)!;
+        const m = generateBlockModel(c);
+        const params = { ...c.defaultParams, initiation: init };
+        const { result } = computeMovementDetailed(m, params);
+        const f = modelFootprint(m, params.freeFace);
+        const field = createFiringField(f, m.pattern, params);
+        // firing time → [earliest start, latest start]
+        const groups = new Map<number, [number, number]>();
+        for (let n = 0; n < m.count; n++) {
+          const [a, b] = f.frame.toLocal(m.centroid[3 * n], m.centroid[3 * n + 1]);
+          const t = field.timeAt(a, b);
+          const g = groups.get(t) ?? [Infinity, -Infinity];
+          groups.set(t, [Math.min(g[0], result.delay[n]), Math.max(g[1], result.delay[n])]);
+        }
+        const times = [...groups.keys()].sort((x, y) => x - y);
+        expect(times.length, id).toBeGreaterThan(init === 'row' ? 5 : 10);
+        for (let q = 1; q < times.length; q++) {
+          const prev = groups.get(times[q - 1])!;
+          const next = groups.get(times[q])!;
+          expect(prev[1], `${id}: ${times[q - 1]} ms starts after ${times[q]} ms`).toBeLessThan(next[0]);
+        }
+      }
+    },
+  );
+
   it.each(['row', 'v', 'echelon-left', 'echelon-right'] as const)('%s keeps every invariant (unique slots, free ground, converged)', (init) => {
     for (const id of ['b1040-017', 'b1030-022', 'b1040-031']) {
       const c = getBlastConfig(id)!;
@@ -183,5 +213,18 @@ describe('holeFiringTimes', () => {
       for (let r = 0; r * 42 <= v && !ok; r++) ok = (v - r * 42) % 25 === 0;
       expect(ok, String(v)).toBe(true);
     }
+  });
+});
+
+describe('completeParams', () => {
+  it('fills keys a stale parameter set lacks (or has with the wrong type) from the defaults', () => {
+    const old: Partial<BlastParameters> = { ...P, maxThrow: 14 };
+    delete old.initiation;
+    delete old.rowDelayMs;
+    delete old.holeDelayMs;
+    expect(completeParams(old)).toEqual({ ...P, maxThrow: 14 });
+    expect(completeParams(undefined)).toEqual(P);
+    const junk = { ...P, initiation: 'spiral', rowDelayMs: Number.NaN, freeFace: 'up', extra: 1 } as unknown as BlastParameters;
+    expect(completeParams(junk)).toEqual(P);
   });
 });

@@ -26,8 +26,9 @@
  * 4. Angle-of-repose relaxation: move the top block of the tallest offending cell to its lowest
  *    valid neighbour until stable or 20·N moves (see `allowedDrop` for the lattice criterion).
  *    Stacks are re-sorted by original z afterwards, so vertical order is preserved.
- * 5. Animation delay = 0.45·(t − t_min)/(t_max − t_min) + 0.05·noise ∈ [0, 0.5], t = the firing
- *    time of the block's hole band (timing.ts): blocks start moving in firing order (visual only).
+ * 5. Animation delay = 0.45·(t − t_min)/(t_max − t_min) + j·noise ∈ [0, 0.5], t = the firing
+ *    time of the block's hole band (timing.ts), j = min(0.05, 0.9 × the smallest normalised step
+ *    between firing times): blocks start strictly in firing order (visual only).
  *
  * Swell scales block size, cell size and stack height by k, so loose volume = swell × bank volume.
  */
@@ -70,6 +71,9 @@ export interface MovementStats {
    */
   pathFallbacks: number;
 }
+
+/** Largest animation-delay jitter within one firing-time group (timeline fraction). */
+export const DELAY_JITTER = 0.05;
 
 /** Cells (Chebyshev) searched around a blocked target for a reachable destination. */
 export const REACH_SEARCH_CELLS = 10;
@@ -310,8 +314,14 @@ export function computeMovementDetailed(
     tMax = Math.max(tMax, fireMs[n]);
   }
   const tSpan = tMax > tMin ? tMax - tMin : 1;
+  // Jitter within a firing-time group only: its amplitude stays below the smallest step between
+  // groups, so every block of an earlier group starts before every block of a later one.
+  const times = Array.from(new Set(fireMs)).sort((x, y) => x - y);
+  let gap = Infinity;
+  for (let q = 1; q < times.length; q++) gap = Math.min(gap, times[q] - times[q - 1]);
+  const jitter = Math.min(DELAY_JITTER, Number.isFinite(gap) ? 0.9 * ((0.45 * gap) / tSpan) : DELAY_JITTER);
   for (let n = 0; n < N; n++) {
-    delay[n] = Math.min(0.5, Math.max(0, (0.45 * (fireMs[n] - tMin)) / tSpan + 0.05 * delayNoise[n]));
+    delay[n] = Math.min(0.5, Math.max(0, (0.45 * (fireMs[n] - tMin)) / tSpan + jitter * delayNoise[n]));
   }
 
   // ── Step 3: stacking — sort by (cell, rank) ─────────────────────────────

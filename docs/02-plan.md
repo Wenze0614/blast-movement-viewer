@@ -30,7 +30,7 @@
 **MVP = Checkpoint 1: live on Vercel by ~16:00 Sunday** (client-only is fine; the API arrives later the same day behind the same interface)
 | ID | Feature | Acceptance criteria |
 |---|---|---|
-| M1 | Synthetic block model | Deterministic from a seed: same seed gives identical arrays. Default 40×24×4 blocks of 2.5 m (3,840 blocks, 100×60×10 m bench). A dipping ore lens plus noise gives about 15–30% ore by tonnes. Grade classes: waste < 0.5, low 0.5–1.5, high ≥ 1.5 g/t Au. Unit test: Σ tonnes = Σ volume × density. |
+| M1 | Synthetic block model | Deterministic from a seed: same seed gives identical arrays. Default bounding grid 40×24×4 blocks of 2.5 m (3,840 cells, 100×60×10 m bench); the blast outline keeps 3,200 blocks. A dipping ore lens plus noise gives about 15–30% ore by tonnes. Grade classes: waste < 0.5, low 0.5–1.5, high ≥ 1.5 g/t Au. Unit test: Σ tonnes = Σ volume × density. |
 | M2 | Instanced 3D render | **One draw call** for all blocks (check `renderer.info.render.calls`). Grade colours with a legend. Orbit camera. ≥ 55 fps on a typical laptop in Chrome at 3,840 blocks. |
 | M3 | Movement model | Pure function `computeMovement(model, params)`. Unit tests: (a) **no two blocks share a post-blast slot**, (b) **no floating blocks**, (c) tonnes and metal conserved exactly, (d) deterministic per seed, (e) mean horizontal displacement is larger in the top flitch than the bottom one, and larger at the front row than the back row. Runs in < 50 ms for 3,840 blocks. |
 | M4 | Blast animation and scrubber | A "Blast" button animates 0→1 over about 2.5 s with front rows firing first. A slider scrubs in either direction. Per-frame CPU work = **one uniform update**. No popping at t = 0 or 1. |
@@ -49,7 +49,7 @@
 | P3 | Section/slice slider + "ore only" toggle | Shows ore pushed under waste. A `uSection` plane uniform + `discard` in the block shader. |
 | P4 | Visual quality | Shader edge-darkening, hemisphere + directional lighting, optional baked per-block occlusion (`aOcclusion`), translucent dig-line curtain, unblasted context rock, plan-view camera button. No post-processing. |
 | P5 | Blast parameter panel → **movement endpoint** | Debounced (~300 ms) `GET /api/blasts/:id/movement?...`. Animates to the new result. Falls back to local compute if the API fails. |
-| P6 | Performance via the **dense demo blast** | `b1040-031` = 80×48×8 = 30,720 blocks served by the API. FPS overlay in dev. Replaces the old client-side "dense toggle". |
+| P6 | Performance via the **dense demo blast** | `b1040-031` = 80×48×8 bounding grid (30,720 cells), 27,088 blocks inside its outline, served by the API. FPS overlay in dev. Replaces the old client-side "dense toggle". |
 | P7 | README, About modal, Loom | See §7. |
 | **P8** | **API** (ADR-10/11/12) | Next.js route handlers: `GET /api/blasts`, `GET /api/blasts/:id`, `GET /api/blasts/:id/model` (binary), `GET /api/blasts/:id/movement` (binary, CDN-cached), `GET /api/health`. Zod-validated. Codec round-trip and endpoint tests. Blast picker in the panel header. |
 | **P9** | **Blasthole layer** | Instanced cylinders on the burden × spacing pattern, coloured by sampled grade. Visible before the blast, fading out during it. Labelled "illustrative pattern, not used by the movement heuristic". |

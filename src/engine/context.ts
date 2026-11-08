@@ -21,9 +21,18 @@ export type RendererLike = Pick<
 
 export type RendererFactory = (canvas: HTMLCanvasElement) => RendererLike;
 
+/** Drawing-buffer pixel ratio cap: retina sharpness without 3×-DPR fill cost. */
+export const MAX_PIXEL_RATIO = 2;
+
+/** The pixel ratio the renderer should use right now (devicePixelRatio, capped). */
+export function targetPixelRatio(): number {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  return Math.min(dpr, MAX_PIXEL_RATIO);
+}
+
 export const defaultRendererFactory: RendererFactory = (canvas) => {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(targetPixelRatio());
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   return renderer;
 };

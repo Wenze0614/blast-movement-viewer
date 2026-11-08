@@ -288,7 +288,7 @@ export interface DataSource {
 - **At scale:** Arrow/Parquet for analytics interop, or **tiled, range-requestable chunks** (per bench/flitch tile + LOD level) streamed into the instanced renderer.
 
 ### ADR-12: Caching, validation and compute placement
-- **Deterministic ⇒ cacheable:** movement is a pure function of (blast config, params), so it's a **GET** with canonicalised query params (fixed key order, rounded to 2 dp). Response: `Cache-Control: public, s-maxage=31536000, immutable` + `ETag = paramsHash`. Repeat slider positions are served from the CDN edge. ⚠️ On the first deploy, check that Vercel's CDN honours this header for Next.js route handlers (look for `x-vercel-cache: HIT`).
+- **Deterministic ⇒ cacheable:** movement is a pure function of (blast config, params), so it's a **GET** with canonicalised query params (fixed key order, rounded to 2 dp). Response: `Cache-Control: public, s-maxage=31536000, immutable` + `ETag = paramsHash`. Repeat slider positions are served from the CDN edge. ⚠️ On the first deploy, check that Vercel's CDN honours this header for Next.js route handlers (look for `x-vercel-cache: HIT`; README "Deploy (Vercel)"). The CDN caches responses up to 10 MB, so the scale blast's ~13 MB payloads are always served by the function, streamed past the 4.5 MB cap on a non-streamed Function response.
 - **Prebuilt models:** the 3 demo model binaries can be generated at build time, either with `generateStaticParams` + `dynamic = 'force-static'` on the model route (⚠️ check this for binary route handlers) or with a prebuild script that writes `public/models/*.bin`.
 - **Validation:** zod schema with ranges (the table lives in `core/params.ts`, shared with the sliders):
   - `freeFace` east | west | north | south

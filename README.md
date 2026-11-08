@@ -92,6 +92,38 @@ npm run build && npm run start   # production build
 
 `NEXT_PUBLIC_DATA_SOURCE=local` runs everything in the browser without the API.
 
+## Deploy (Vercel)
+
+No configuration is needed beyond importing the repository:
+
+1. In Vercel, **Add New → Project**, import the GitHub repository. The framework preset is
+   detected as Next.js; keep the defaults (build `next build`, Node 22 or later per `engines`).
+2. No environment variables are required. Optional: `NEXT_PUBLIC_DATA_SOURCE=local` makes the
+   deployed app compute everything in the browser (a Web Worker) and never call the API.
+3. Deploy. The page is static; `/api/*` runs as Vercel Functions (Node.js runtime).
+
+What to expect, checked against Vercel's documented limits:
+
+| Limit | This app |
+|---|---|
+| Function memory (2 GB on Hobby) | about 0.45 GB peak for the 2-million-block blast at extreme parameters |
+| Function duration (300 s default) | movement 1.7–2.4 s for the scale blast, milliseconds for the others |
+| Function response body (4.5 MB unless streamed) | payloads over 4 MB (only the scale blast's, about 13 MB) are streamed |
+| CDN cacheable response (10 MB) | the standard blasts are cached at the edge (`s-maxage`, immutable with `?v=`); the scale blast's payloads are larger, so every request reaches the function (the model is generated once per warm instance) |
+
+After the first deploy, check the cache headers (replace the host):
+
+```sh
+curl -s https://YOUR-APP.vercel.app/api/health
+# the same model URL twice: x-vercel-cache MISS, then HIT (unversioned URLs: s-maxage=60; the
+# ?v= URLs the app requests are immutable)
+curl -s -D - -o /dev/null https://YOUR-APP.vercel.app/api/blasts/b1040-017/model | grep -i -E 'x-vercel-cache|cache-control|content-type'
+curl -s -D - -o /dev/null https://YOUR-APP.vercel.app/api/blasts/b1040-017/model | grep -i -E 'x-vercel-cache|cache-control|content-type'
+```
+
+In the app, the source badge should read `● API · … ms` for every blast, including the scale blast
+(`● Local fallback` would mean an API call failed; hover the badge for the reason).
+
 ## Architecture
 
 ```

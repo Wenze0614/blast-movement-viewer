@@ -100,7 +100,8 @@ npm run build && npm run start   # production build
   instanced cylinder mesh, one opacity uniform). Lighting is a small hand-written chunk shared by
   both, so there are no scene lights. The hole material is opaque before the blast and switches to
   transparent with `depthWrite: false` only while it fades, so fading holes never hide what is
-  behind them.
+  behind them. Those flags and the mesh visibility change only on a transition (opaque ↔ fading ↔
+  hidden, or the layer toggle); per frame only the opacity uniform is written.
 - **Render on demand.** The loop draws only when something invalidates the frame or a system is
   animating (playback). React never re-renders per frame: the engine subscribes to discrete store
   changes and reads continuous ones (`progress`) with `getState()`.
@@ -157,7 +158,9 @@ Errors are typed JSON (`{ error: { code, message, details? } }`, always `no-stor
 ## DataSource and fallback
 
 The UI and engine never call `fetch`. They go through one `DataSource` interface (`listBlasts`,
-`getBlast`, `getModel`, `getMovement`, all abortable).
+`getBlast`, `getModel`, `getMovement`). Only `getModel` and `getMovement` take an `AbortSignal`;
+a `listBlasts` or `getBlast` result that arrives after the pipeline has moved on is ignored
+rather than aborted.
 
 - `ApiDataSource` fetches and decodes BMV1 (10 s timeout).
 - `LocalDataSource` runs the same `src/core` code in the browser; results are byte-identical.

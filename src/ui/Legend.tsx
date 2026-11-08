@@ -126,7 +126,7 @@ export default function Legend() {
   // Boolean slice: re-renders once as the blast starts, not on every progress write.
   const started = useAppStore((s) => s.progress > 0);
 
-  const gradeTonnes = useMemo(() => (model ? classTonnes(model.oreClass, model.tonnes, 3) : null), [model]);
+  const gradeTonnes = useMemo(() => (model ? classTonnes(model.oreClass, model.tonnes, Object.keys(GRADE_PALETTE).length) : null), [model]);
   const totalTonnes = useMemo(() => (model ? sumTonnes(model.tonnes) : 0), [model]);
   const props = useMemo(
     () => legendProps({ movement, polygons, reconciliation, colourMode, outcomeLine, started }, gradeTonnes, totalTonnes),

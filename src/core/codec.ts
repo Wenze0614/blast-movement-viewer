@@ -323,7 +323,11 @@ function checkModelHeader(h: ModelHeader): void {
   if (h.count > (g.nx as number) * (g.ny as number) * (g.nz as number)) bad('count must be <= grid.nx * ny * nz');
   const gr = obj(h.grades, 'grades');
   num(gr.cutoff, 'grades.cutoff');
+  num(gr.mediumGrade, 'grades.mediumGrade');
   num(gr.highGrade, 'grades.highGrade');
+  if (!((gr.cutoff as number) <= (gr.mediumGrade as number) && (gr.mediumGrade as number) <= (gr.highGrade as number))) {
+    bad('grades must satisfy cutoff <= mediumGrade <= highGrade');
+  }
   const pt = obj(h.pattern, 'pattern');
   for (const k of ['burden', 'spacing'] as const) {
     num(pt[k], `pattern.${k}`);

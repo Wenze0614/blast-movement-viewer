@@ -39,6 +39,7 @@ const routedFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): 
     if (!oldDetail || !res.ok) return res;
     const body = await res.json();
     for (const k of ['initiation', 'rowDelayMs', 'holeDelayMs']) delete body.defaultParams[k];
+    delete body.grades.mediumGrade; // and before the four grade classes
     return Response.json(body, { status: res.status, headers: res.headers });
   }
   if (path[3] === 'model') return getModel(req, ctx);
@@ -79,6 +80,7 @@ describe('ApiDataSource through the route handlers', () => {
     expect(s.status, s.error ?? '').toBe('ready');
     expect(s.blast!.defaultParams).toMatchObject({ initiation: 'v', rowDelayMs: 42, holeDelayMs: 25 });
     expect(s.params).toMatchObject({ initiation: 'v', rowDelayMs: 42, holeDelayMs: 25, maxThrow: 10 });
+    expect(s.blast!.grades).toEqual(s.model!.grades); // completed (and checked against the model)
     expect(s.movement).not.toBeNull();
     pipeline.dispose();
   });

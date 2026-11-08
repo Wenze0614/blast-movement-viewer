@@ -6,6 +6,7 @@
  */
 import type { ApiError, BlastDetail, BlastSummary } from '@/core/api-types';
 import { blastDataVersion, getBlastConfig } from '@/core/blasts';
+import { completeGrades } from '@/core/blockModel';
 import { completeParams } from '@/core/params';
 import { CodecError, decodeModel, decodeMovement } from '@/core/codec';
 import { canonicalParamsString } from '@/core/hash';
@@ -104,6 +105,7 @@ export class ApiDataSource implements DataSource {
     // A detail cached before newer params existed lacks them: complete its defaults.
     return this.json<BlastDetail>(`/api/blasts/${encodeURIComponent(id)}`).then((d) => ({
       ...d,
+      grades: completeGrades(d.grades),
       defaultParams: completeParams(d.defaultParams),
     }));
   }

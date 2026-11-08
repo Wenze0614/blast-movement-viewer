@@ -10,10 +10,12 @@
 export type Vec3 = [number, number, number];
 export type Vec2 = [number, number];
 
+/** Pre-blast grade class (display): waste < cutoff ≤ low < medium ≤ medium < high ≤ high. */
 export enum OreClass {
   Waste = 0,
   LowGrade = 1,
-  HighGrade = 2,
+  MediumGrade = 2,
+  HighGrade = 3,
 }
 
 /** Synthetic; display only. */
@@ -42,7 +44,9 @@ export interface GradeSettings {
   unit: 'g/t';
   /** g/t; ore if grade >= cutoff. 0.5 */
   cutoff: number;
-  /** g/t; display class split. 1.5 */
+  /** g/t; display split low → medium grade. 1.5 */
+  mediumGrade: number;
+  /** g/t; display split medium → high grade. 3.0 */
   highGrade: number;
 }
 

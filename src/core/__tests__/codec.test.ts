@@ -234,6 +234,8 @@ describe('BMV1 codec: typed errors', () => {
     ['model grid.origin not a Vec3', 'model', (h) => (sub(h, 'grid').origin = [0, 0])],
     ['model count exceeds the grid', 'model', (h) => (sub(h, 'grid').nz = 1)],
     ['model grades null', 'model', (h) => (h.grades = null)],
+    ['model grades without mediumGrade', 'model', (h) => delete sub(h, 'grades').mediumGrade],
+    ['model grade breaks out of order', 'model', (h) => (sub(h, 'grades').mediumGrade = 9)],
     ['model configHash empty', 'model', (h) => (h.configHash = '')],
     ['movement surface missing', 'movement', (h) => delete h.surface],
     ['movement postGrid a string', 'movement', (h) => (h.postGrid = 'x')],

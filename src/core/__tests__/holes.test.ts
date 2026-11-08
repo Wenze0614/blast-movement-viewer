@@ -89,7 +89,7 @@ describe('BlastSummary / BlastDetail builders', () => {
     expect(s[0]).toEqual({
       id: 'b1040-017',
       name: 'Bench 1040 · Blast 017',
-      description: 'Single dipping lens crossing the throw direction',
+      description: 'Branching gold vein crossing the throw direction',
       blockCount: 3200,
       benchRL: 1030,
       freeFace: 'east',

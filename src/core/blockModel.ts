@@ -7,7 +7,7 @@
  * Sparse: a blast outline (plan polygon) selects the columns that hold blocks; every flitch of a
  * selected column is present. Block id = index into the arrays; `cell[id]` is its grid cell.
  */
-import { DEFAULT_PATTERN } from './defaults';
+import { DEFAULT_GRADE_SETTINGS, DEFAULT_PATTERN } from './defaults';
 import { outlineColumnMask } from './footprint';
 import { canonicalJson, fnv1a64 } from './hash';
 import { createOrebodySampler, type OrebodySpec } from './orebody';
@@ -44,7 +44,7 @@ export interface BlockModelConfig {
  * change alters generated grades/densities for the SAME config, so cached results keyed on
  * `configHash` (ADR-12 immutable CDN responses) are invalidated.
  */
-export const MODEL_GENERATOR_VERSION = 2;
+export const MODEL_GENERATOR_VERSION = 3;
 
 /**
  * Canonical hash of everything that determines a block model: generator version, grid, grade
@@ -104,9 +104,24 @@ export function blockIdAt(model: BlockModel, i: number, j: number, k: number): n
   return -1;
 }
 
-/** Pre-blast class by grade: waste < cutoff ≤ low < highGrade ≤ high. */
+/**
+ * Complete grade settings that may predate newer keys (a blast detail cached before `mediumGrade`
+ * existed): a missing or non-finite threshold takes its default, then the breaks are made
+ * monotonic (mediumGrade clamped into [cutoff, highGrade]) so every class stays well defined.
+ */
+export function completeGrades(g: Partial<GradeSettings> | null | undefined): GradeSettings {
+  const d = DEFAULT_GRADE_SETTINGS;
+  const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+  const cutoff = num(g?.cutoff, d.cutoff);
+  const highGrade = Math.max(cutoff, num(g?.highGrade, d.highGrade));
+  const mediumGrade = Math.min(highGrade, Math.max(cutoff, num(g?.mediumGrade, d.mediumGrade)));
+  return { element: 'Au', unit: 'g/t', cutoff, mediumGrade, highGrade };
+}
+
+/** Pre-blast class by grade: waste < cutoff ≤ low < mediumGrade ≤ medium < highGrade ≤ high. */
 export function classifyGrade(grade: number, grades: GradeSettings): OreClass {
   if (grade >= grades.highGrade) return OreClass.HighGrade;
+  if (grade >= grades.mediumGrade) return OreClass.MediumGrade;
   if (grade >= grades.cutoff) return OreClass.LowGrade;
   return OreClass.Waste;
 }

@@ -32,7 +32,8 @@
  *   4. last resort: the holes are re-sampled from the model with the model's own pattern
  *      (`model.pattern`, which the movement's firing sequence uses), so the layer never shows
  *      grades or timing from a model that isn't on screen.
- * "Matches" is checked, not assumed: the detail's drill pattern must equal `model.pattern` (the
+ * "Matches" is checked, not assumed: the detail's grade breaks must equal `model.grades` (the hole
+ * layer classes sampled grades with them), its drill pattern must equal `model.pattern` (the
  * firing sequence the movement uses) and `generateHoles(model, model.pattern, detail.freeFace)`
  * must reproduce `detail.holes`; a re-sampled detail takes the model's pattern. Params are never touched (no setBlast). `isCurrent()` is checked after
  * the fetch, and the detail and the model are written together only while the request is current.
@@ -42,7 +43,7 @@ import { getBlastConfig } from '@/core/blasts';
 import { blockModelConfigHash } from '@/core/blockModel';
 import { buildBlastDetail, generateHoles } from '@/core/holes';
 import { isMovementFor } from '@/core/movement';
-import type { BlockModel } from '@/core/types';
+import type { BlockModel, GradeSettings } from '@/core/types';
 import { isAbortError, LocalDataSource, type DataSource, type DataSourceKind } from '@/data';
 import { attachDerive } from './derive';
 import { modelUpdate, type AppState, type AppStore } from './store';
@@ -61,6 +62,11 @@ function sameHoles(a: readonly BlastHole[], b: readonly BlastHole[]): boolean {
     const o = b[i];
     return h.id === o.id && h.sampledGrade === o.sampledGrade && same3(h.collar, o.collar) && same3(h.toe, o.toe);
   });
+}
+
+/** Same grade breaks (the hole layer classes sampled grades with the detail's)? */
+function sameGrades(a: GradeSettings, b: GradeSettings): boolean {
+  return a.cutoff === b.cutoff && a.mediumGrade === b.mediumGrade && a.highGrade === b.highGrade;
 }
 
 /** Same drill pattern, field by field? */
@@ -83,6 +89,7 @@ export function detailMatchesModel(detail: BlastDetail, model: BlockModel): bool
   return (
     detail.blockCount === model.count &&
     samePattern(detail.pattern, model.pattern) &&
+    sameGrades(detail.grades, model.grades) &&
     sameHoles(detail.holes, generateHoles(model, model.pattern, detail.freeFace))
   );
 }

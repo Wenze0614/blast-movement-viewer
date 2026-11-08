@@ -4,6 +4,7 @@
  */
 import * as THREE from 'three';
 import { BLOCK_ANIMATION_DURATION } from '@/core/easing';
+import { createLightingUniforms } from './lighting.uniforms';
 
 /** Throw-arc height factor: peak lift = uArc × horizontal distance (visual only). */
 export const THROW_ARC = 0.18;
@@ -43,10 +44,7 @@ export function createBlocksUniforms(): BlocksUniforms {
     uScaleEnd: { value: 1 },
     uSection: { value: new THREE.Vector4(0, 0, 0, -1) },
     uOreOnly: { value: 0 },
-    // From the south-east and above, so the east (free) face and the bench top read differently.
-    uLightDir: { value: new THREE.Vector3(0.45, -0.6, 0.66).normalize() },
-    uSkyColor: { value: new THREE.Color('#9aa3ad') },
-    uGroundColor: { value: new THREE.Color('#3a342d') },
+    ...createLightingUniforms(),
     uEdgeDarkening: { value: 0.4 },
   };
 }

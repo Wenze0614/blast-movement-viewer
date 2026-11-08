@@ -188,6 +188,24 @@ function paramsUpdate(state: AppState, next: BlastParameters): Partial<AppState>
   return { params: { ...next }, movement: null, polygons: null, reconciliation: null, ...REWIND };
 }
 
+/**
+ * The state update `setModel` applies: the new model, and the movement and everything derived from
+ * it cleared, rewound. Exported so the load pipeline can store a model together with its blast
+ * detail in ONE `setState` (every subscriber sees a matched pair) without duplicating this logic.
+ */
+export function modelUpdate(model: BlockModel, source: DataSourceKind): Partial<AppState> {
+  return {
+    model,
+    source,
+    ...(source === 'api' ? { fallback: null } : {}),
+    movement: null,
+    polygons: null,
+    reconciliation: null,
+    selection: null,
+    ...REWIND,
+  };
+}
+
 /** Factory so tests (and StrictMode remounts) can get an isolated store. */
 export function createAppStore(initial: Partial<AppState> = {}): AppStore {
   return createStore<AppStoreState>()(
@@ -217,17 +235,7 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       setStatus: (status, error = null) => set({ status, error }),
       setFallback: (fallback) => set({ fallback }),
       // A new model invalidates the movement and everything derived from it, and rewinds.
-      setModel: (model, source) =>
-        set({
-          model,
-          source,
-          ...(source === 'api' ? { fallback: null } : {}),
-          movement: null,
-          polygons: null,
-          reconciliation: null,
-          selection: null,
-          ...REWIND,
-        }),
+      setModel: (model, source) => set(modelUpdate(model, source)),
       // A new movement invalidates the derived slots; the derive step (state/derive.ts) refills them.
       // It always lands at progress 0 (blocks in situ, no pop). `playing` is kept: a Blast pressed
       // while the movement was loading (playback holds at 0 meanwhile) starts from the beginning.

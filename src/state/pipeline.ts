@@ -6,10 +6,22 @@
  * and the inputs it captured (blastId, model, params) are still the store's. A superseded request
  * that rejects with an ordinary error is ignored, so it can never overwrite the newer request's
  * loading/ready status.
+ *
+ * Model–movement binding: a movement is applied only if it was computed for the store's CURRENT
+ * model and params (`isMovementFor`: paramsHash binds the model's configHash and the canonical
+ * params; block counts must agree). The model and the movement are separate requests and, with
+ * the API's per-call fallback, can come from different sources (e.g. a local model loaded while
+ * the API was down, then an API movement after it recovered on a newer deploy). On a mismatch the
+ * movement is dropped, the model is reloaded from the DataSource, and the movement is requested
+ * again for that model. If the pair is STILL mismatched, blast detail, model and movement are all
+ * loaded from local compute (always consistent) and `store.fallback` is set, so the source badge
+ * reads "Local fallback". Only a mismatch inside local compute itself is reported as an error,
+ * and only while that request is still current.
  */
-import { isAbortError, type DataSource } from '@/data';
+import { isMovementFor } from '@/core/movement';
+import { isAbortError, LocalDataSource, type DataSource } from '@/data';
 import { attachDerive } from './derive';
-import type { AppStore } from './store';
+import type { AppState, AppStore } from './store';
 
 export interface DataPipeline {
   /** Resolves when the current blast (or movement) load has settled. Useful in tests. */
@@ -20,7 +32,13 @@ export interface DataPipeline {
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-export function startDataPipeline(store: AppStore, data: DataSource): DataPipeline {
+export interface DataPipelineOptions {
+  /** Last resort when the DataSource keeps returning mismatched pairs. Default: a LocalDataSource. */
+  local?: DataSource;
+}
+
+export function startDataPipeline(store: AppStore, data: DataSource, options: DataPipelineOptions = {}): DataPipeline {
+  let local = options.local ?? null;
   let blastCtrl: AbortController | null = null;
   let movementCtrl: AbortController | null = null;
   let disposed = false;
@@ -36,7 +54,8 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     store.getState().setStatus('error', message(err));
   };
 
-  async function loadMovement(): Promise<void> {
+  /** `resync`: may this load reload the model once if the movement doesn't belong to it? */
+  async function loadMovement(resync = true): Promise<void> {
     const { model, blastId, params } = store.getState();
     if (!model) return;
     movementCtrl?.abort();
@@ -50,10 +69,60 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     try {
       const movement = await data.getMovement(blastId, params, ctrl.signal);
       if (!isCurrent()) return;
+      if (!isMovementFor(movement, model, params)) {
+        const detail = `movement ${movement.paramsHash} (${movement.delay.length} blocks, ${data.kind}) does not belong to model ${model.configHash} (${model.count} blocks) with the current params`;
+        if (!resync) {
+          console.warn(`[bmv] ${detail} again; using local compute for both model and movement.`);
+          await loadLocalPair(blastId, params, ctrl, isCurrent, t0);
+          return;
+        }
+        console.warn(`[bmv] ${detail}; reloading a consistent model + movement.`);
+        const fresh = await data.getModel(blastId, ctrl.signal);
+        if (!isCurrent()) return;
+        if (fresh !== model) store.getState().setModel(fresh, data.kind);
+        return await loadMovement(false);
+      }
       store.getState().setMovement(movement, data.kind, now() - t0);
     } catch (err) {
       fail(err, isCurrent);
     }
+  }
+
+  /**
+   * Blast detail + model + movement all from local compute: consistent by construction, so a hole
+   * layer never draws API metadata (pattern, holes) over a local model.
+   *
+   * `isCurrent()` is checked right after EVERY await and before any store write, including the
+   * mismatch error: a local source may ignore the abort and resolve after a param change or blast
+   * switch, and a superseded request must never touch the newer request's status. (isCurrent()
+   * compares the store's model with the one this load started from; the writes at the end change
+   * it on purpose, which is why they come last.)
+   */
+  async function loadLocalPair(
+    blastId: string,
+    params: AppState['params'],
+    ctrl: AbortController,
+    isCurrent: () => boolean,
+    t0: number,
+  ): Promise<void> {
+    const src = (local ??= new LocalDataSource());
+    const model = await src.getModel(blastId, ctrl.signal);
+    if (!isCurrent()) return;
+    const movement = await src.getMovement(blastId, params, ctrl.signal);
+    if (!isCurrent()) return;
+    const detail = await src.getBlast(blastId);
+    if (!isCurrent()) return;
+    if (!isMovementFor(movement, model, params) || detail.id !== blastId || detail.blockCount !== model.count) {
+      store.getState().setStatus('error', 'Model and movement are out of sync; reload the page.');
+      return;
+    }
+    const s = store.getState();
+    s.setFallback('The API returned a movement for a different model; computed both locally.');
+    // Not setBlast(): that resets params to the detail's defaults, and the user's current params
+    // are exactly what this movement was computed for. Only the detail's metadata is replaced.
+    store.setState({ blast: detail });
+    s.setModel(model, src.kind);
+    store.getState().setMovement(movement, src.kind, now() - t0);
   }
 
   async function loadBlast(id: string): Promise<void> {

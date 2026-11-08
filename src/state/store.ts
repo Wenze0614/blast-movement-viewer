@@ -58,6 +58,11 @@ export interface AppState {
   source: DataSourceKind | null;
   /** ms for the last movement fetch/compute (badge: "● API · 38 ms"). */
   lastLatencyMs: number | null;
+  /**
+   * Why the API was bypassed: the error of the last API call that fell back to local compute
+   * (badge: "Local fallback"). Cleared when a model or movement from the API lands.
+   */
+  fallback: string | null;
   error: string | null;
 
   // ── Data from the DataSource (SoA typed arrays; never copied into React state) ─
@@ -99,6 +104,8 @@ export interface AppActions {
   resetParams(): void;
 
   setStatus(status: LoadStatus, error?: string | null): void;
+  /** An API call failed and local compute served it instead (DataSource `onFallback`). */
+  setFallback(reason: string | null): void;
   /** Clears movement, derived slots and selection (they belong to the previous model). */
   setModel(model: BlockModel, source: DataSourceKind): void;
   /** Clears the derived slots; the derive step recomputes them for this movement. */
@@ -137,6 +144,7 @@ export function initialAppState(): AppState {
     status: 'idle',
     source: null,
     lastLatencyMs: null,
+    fallback: null,
     error: null,
     model: null,
     movement: null,
@@ -207,9 +215,19 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       resetParams: () => set(paramsUpdate(get(), get().blast?.defaultParams ?? DEFAULT_BLAST_PARAMETERS)),
 
       setStatus: (status, error = null) => set({ status, error }),
+      setFallback: (fallback) => set({ fallback }),
       // A new model invalidates the movement and everything derived from it, and rewinds.
       setModel: (model, source) =>
-        set({ model, source, movement: null, polygons: null, reconciliation: null, selection: null, ...REWIND }),
+        set({
+          model,
+          source,
+          ...(source === 'api' ? { fallback: null } : {}),
+          movement: null,
+          polygons: null,
+          reconciliation: null,
+          selection: null,
+          ...REWIND,
+        }),
       // A new movement invalidates the derived slots; the derive step (state/derive.ts) refills them.
       // It always lands at progress 0 (blocks in situ, no pop). `playing` is kept: a Blast pressed
       // while the movement was loading (playback holds at 0 meanwhile) starts from the beginning.
@@ -218,6 +236,7 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
           movement,
           progress: 0,
           source,
+          ...(source === 'api' ? { fallback: null } : {}),
           lastLatencyMs: latencyMs ?? null,
           status: 'ready',
           error: null,

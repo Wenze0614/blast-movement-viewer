@@ -9,7 +9,7 @@ import { computeDerived } from '@/state/derive';
 import { appStore, initialAppState } from '@/state/store';
 import { classTonnes, sectionRange, sumTonnes } from '@/state/views';
 import { legendProps, LegendView, OUTCOME_CAPTION } from '../Legend';
-import { sliderBounds } from '../ViewControls';
+import { mid, sliderBounds } from '../ViewControls';
 import ViewControls from '../ViewControls';
 
 const data = new LocalDataSource();
@@ -121,7 +121,7 @@ describe('ViewControls (store-connected)', () => {
     expect(appStore.getState().oreOnly).toBe(true);
   });
 
-  it('section: disabled without a model; enabling centres the plane in the drawn range; axis change re-centres', () => {
+  it('section: disabled without a model; first enable centres the plane in the blast range; axis change re-centres', () => {
     render(<ViewControls />);
     const toggle = screen.getByRole('checkbox', { name: 'Section' }) as HTMLInputElement;
     expect(toggle.disabled).toBe(true);
@@ -130,12 +130,15 @@ describe('ViewControls (store-connected)', () => {
       appStore.getState().setMovement(movement, 'local');
     });
     expect(toggle.disabled).toBe(false);
+    // The initial position (0) is inside the y range (the bench edge): it must still be centred.
+    const yRange = sliderBounds(sectionRange(model, movement, 'y'));
+    const [y0, y1] = yRange;
+    expect(appStore.getState().section.position).toBeGreaterThanOrEqual(y0);
     fireEvent.click(toggle);
-    const [y0, y1] = sliderBounds(sectionRange(model, movement, 'y'));
     const s = appStore.getState().section;
     expect(s.enabled).toBe(true);
-    expect(s.position).toBeGreaterThan(y0);
-    expect(s.position).toBeLessThan(y1);
+    expect(s.position).toBe(mid(yRange));
+    expect(s.position).toBeCloseTo((y0 + y1) / 2, 0);
 
     const slider = screen.getByRole('slider', { name: /Section position/ }) as HTMLInputElement;
     expect(Number(slider.min)).toBe(y0);
@@ -144,9 +147,22 @@ describe('ViewControls (store-connected)', () => {
     expect(appStore.getState().section.position).toBe(12.5);
 
     fireEvent.click(screen.getByRole('radio', { name: 'Easting (x)' }));
-    const [x0, x1] = sliderBounds(sectionRange(model, movement, 'x'));
+    const xRange = sliderBounds(sectionRange(model, movement, 'x'));
     expect(appStore.getState().section.axis).toBe('x');
-    expect(appStore.getState().section.position).toBeCloseTo((x0 + x1) / 2, 0);
+    expect(appStore.getState().section.position).toBe(mid(xRange));
+  });
+
+  it('section: a position the user chose survives disable → re-enable', () => {
+    appStore.setState({ model, movement });
+    render(<ViewControls />);
+    const toggle = screen.getByRole('checkbox', { name: 'Section' });
+    fireEvent.click(toggle); // centred
+    const slider = screen.getByRole('slider', { name: /Section position/ });
+    fireEvent.change(slider, { target: { value: '12.5' } });
+    fireEvent.click(toggle); // off
+    expect(appStore.getState().section.enabled).toBe(false);
+    fireEvent.click(toggle); // on again: keeps 12.5
+    expect(appStore.getState().section).toMatchObject({ enabled: true, position: 12.5 });
   });
 
   it('a position outside a new blast’s range is clamped back into it', () => {

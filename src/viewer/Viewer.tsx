@@ -13,9 +13,14 @@ import { startDataPipeline } from '@/state/pipeline';
 import { appStore } from '@/state/store';
 
 let sharedDataSource: DataSource | null = null;
-/** One DataSource per page (LocalDataSource caches generated models). */
+/**
+ * One DataSource per page (both sources cache models). An API failure falls back to local compute
+ * and flags it in the store for the source badge.
+ */
 function dataSource(): DataSource {
-  sharedDataSource ??= createDataSource();
+  sharedDataSource ??= createDataSource({
+    onFallback: (err) => appStore.getState().setFallback(err instanceof Error ? err.message : String(err)),
+  });
   return sharedDataSource;
 }
 

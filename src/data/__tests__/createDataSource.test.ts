@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDataSource, LocalDataSource } from '..';
+import { createDataSource, FallbackDataSource, LocalDataSource } from '..';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -7,29 +7,26 @@ afterEach(() => {
 });
 
 describe('createDataSource (ADR-9, M10)', () => {
-  it("returns a LocalDataSource for kind 'local' without a note", () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+  it("returns a LocalDataSource for kind 'local'", () => {
     const ds = createDataSource({ kind: 'local' });
     expect(ds).toBeInstanceOf(LocalDataSource);
     expect(ds.kind).toBe('local');
-    expect(info).not.toHaveBeenCalled();
   });
 
-  it("'api' falls back to local with a console note until the API source lands (Stage 4)", () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+  it("'api' → the API with automatic fallback to local compute", () => {
     const ds = createDataSource({ kind: 'api' });
-    expect(ds.kind).toBe('local');
-    expect(info).toHaveBeenCalledOnce();
+    expect(ds).toBeInstanceOf(FallbackDataSource);
+    expect(ds.kind).toBe('api');
+    expect((ds as FallbackDataSource).fallback).toBeInstanceOf(LocalDataSource);
   });
 
-  it('reads NEXT_PUBLIC_DATA_SOURCE when no kind is given', () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+  it("reads NEXT_PUBLIC_DATA_SOURCE when no kind is given; default (unset / unknown) is 'api'", () => {
     vi.stubEnv('NEXT_PUBLIC_DATA_SOURCE', 'local');
-    createDataSource();
-    expect(info).not.toHaveBeenCalled();
+    expect(createDataSource()).toBeInstanceOf(LocalDataSource);
     vi.stubEnv('NEXT_PUBLIC_DATA_SOURCE', '');
-    createDataSource();
-    expect(info).toHaveBeenCalledOnce(); // default 'api' → note
+    expect(createDataSource()).toBeInstanceOf(FallbackDataSource);
+    vi.stubEnv('NEXT_PUBLIC_DATA_SOURCE', 'bogus');
+    expect(createDataSource()).toBeInstanceOf(FallbackDataSource);
   });
 
   it('lists the three demo blasts', async () => {

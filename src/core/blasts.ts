@@ -11,7 +11,9 @@
  * Bench "1040" has its crest at RL 1040 and its toe (benchRL, grid origin z) at RL 1030.
  */
 import type { BlastPattern } from './api-types';
-import type { BlockModelConfig } from './blockModel';
+import { blockModelConfigHash, type BlockModelConfig } from './blockModel';
+import { fnv1a64 } from './hash';
+import { MOVEMENT_MODEL_VERSION } from './movement';
 import { DEFAULT_BLAST_PARAMETERS, DEFAULT_GRADE_SETTINGS } from './defaults';
 import type { OrebodySpec } from './orebody';
 import type { BlastParameters } from './types';
@@ -124,4 +126,14 @@ export const DEFAULT_BLAST_CONFIG_ID = 'b1040-017';
 
 export function getBlastConfig(id: string): BlastConfig | undefined {
   return BLAST_CONFIGS.find((c) => c.id === id);
+}
+
+/**
+ * Data version of a blast: changes whenever its model or movement output could change (config,
+ * generator version, movement heuristic version). Clients append it as `?v=` to the immutable
+ * model and movement URLs (ADR-12), so a deploy that changes the data never hits a stale CDN entry.
+ * Cheap: hashes the config, does not generate the model.
+ */
+export function blastDataVersion(cfg: BlastConfig): string {
+  return fnv1a64(`${blockModelConfigHash(cfg)}|movement/v${MOVEMENT_MODEL_VERSION}`).slice(0, 8);
 }

@@ -1,9 +1,10 @@
 'use client';
 /**
  * Right panel (ADR-8): title, blast picker + source badge, playback, blast parameters (P5), view
- * controls + legend, layers, reconciliation.
+ * controls + legend, layers (dig lines, blastholes), reconciliation. The header has the About modal (P7).
  */
 import { useAppStore } from '@/state/hooks';
+import AboutButton from './AboutModal';
 import BlastControls from './BlastControls';
 import BlastPicker from './BlastPicker';
 import LayerToggles from './LayerToggles';
@@ -19,7 +20,10 @@ export default function Panel() {
   return (
     <div className="space-y-4">
       <header className="space-y-2">
-        <h1 className="text-base font-semibold">Blast Movement Viewer</h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-base font-semibold">Blast Movement Viewer</h1>
+          <AboutButton />
+        </div>
         <div className="flex items-end gap-2">
           <BlastPicker />
           <div className="pb-1">

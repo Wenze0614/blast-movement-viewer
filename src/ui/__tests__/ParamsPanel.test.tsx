@@ -27,7 +27,7 @@ describe('BlastPicker', () => {
     render(<BlastPicker />);
     const select = screen.getByRole('combobox', { name: /Blast/ }) as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.value)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
-    expect(select.options[2].textContent).toContain('30,720 blocks');
+    expect(select.options[2].textContent).toContain('27,088 blocks');
     fireEvent.change(select, { target: { value: 'b1040-031' } });
     expect(appStore.getState().blastId).toBe('b1040-031');
   });

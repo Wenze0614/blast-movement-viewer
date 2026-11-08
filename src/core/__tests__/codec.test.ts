@@ -33,7 +33,7 @@ function bytesEqual(a: ArrayBufferView, b: ArrayBufferView): boolean {
 }
 
 function expectModelEqual(got: BlockModel, want: BlockModel) {
-  for (const k of ['centroid', 'grade', 'density', 'tonnes', 'rockType', 'oreClass'] as const) {
+  for (const k of ['cell', 'centroid', 'grade', 'density', 'tonnes', 'rockType', 'oreClass'] as const) {
     expect(bytesEqual(got[k], want[k]), k).toBe(true);
   }
   expect(got.grid).toEqual(want.grid);
@@ -81,11 +81,11 @@ describe('BMV1 codec: round-trip (all three demo blasts)', () => {
     }
   });
 
-  it('model payload size matches the ADR-11 estimate (26 B/block + a small header)', () => {
+  it('model payload size matches the ADR-11 estimate plus the cell index (30 B/block + a small header)', () => {
     for (const { model } of fixtures) {
       const bytes = encodeModel(model).byteLength;
-      expect(bytes).toBeGreaterThanOrEqual(26 * model.count);
-      expect(bytes).toBeLessThan(26 * model.count + 2048);
+      expect(bytes).toBeGreaterThanOrEqual(30 * model.count);
+      expect(bytes).toBeLessThan(30 * model.count + 2048);
     }
   });
 });
@@ -105,17 +105,18 @@ describe('BMV1 codec: layout', () => {
     expect(header.fields[0].offset).toBe(8 + h);
   });
 
-  it('aligns every section to 4 bytes; Float32 sections precede Uint8 sections; no overlap', () => {
+  it('aligns every section to 4 bytes; Float32, then Uint32, then Uint8 sections; no overlap', () => {
+    const order = { f32: 0, u32: 1, u8: 2 } as const;
     for (const buf of [encodeModel(small.model), encodeMovement(small.movement, small.model.configHash)]) {
       const { fields } = readHeader(buf);
-      let seenU8 = false;
+      let prevRank = 0;
       let prevEnd = 0;
       for (const f of fields) {
         expect(f.offset % 4, f.name).toBe(0);
         expect(f.offset).toBeGreaterThanOrEqual(prevEnd);
-        prevEnd = f.offset + f.length * (f.type === 'f32' ? 4 : 1);
-        if (f.type === 'u8') seenU8 = true;
-        else expect(seenU8, `${f.name} after a Uint8 section`).toBe(false);
+        prevEnd = f.offset + f.length * (f.type === 'u8' ? 1 : 4);
+        expect(order[f.type], `${f.name} out of type order`).toBeGreaterThanOrEqual(prevRank);
+        prevRank = order[f.type];
       }
       expect(buf.byteLength % 4).toBe(0);
       expect(buf.byteLength - prevEnd).toBeLessThan(4);
@@ -178,13 +179,31 @@ describe('BMV1 codec: typed errors', () => {
     expectThrowsCode(() => decodeModel(model.slice(0, model.byteLength - 8)), 'TRUNCATED');
   });
 
-  it('unknown schemaVersion → UNSUPPORTED_VERSION', () => {
+  it.each([1, 9])('schemaVersion %i (v1 = dense models before the cell index) → UNSUPPORTED_VERSION', (v) => {
+    expect(BMV1_SCHEMA_VERSION).toBe(2);
     const bad = model.slice();
     const h = new DataView(bad.buffer).getUint32(4, true);
     const text = new TextDecoder().decode(bad.subarray(8, 8 + h));
-    expect(text).toContain('"schemaVersion":1,');
-    bad.set(new TextEncoder().encode(text.replace('"schemaVersion":1,', '"schemaVersion":9,')), 8);
+    expect(text).toContain('"schemaVersion":2,');
+    bad.set(new TextEncoder().encode(text.replace('"schemaVersion":2,', `"schemaVersion":${v},`)), 8);
     expectThrowsCode(() => decodeModel(bad), 'UNSUPPORTED_VERSION');
+  });
+
+  /** The model payload with its `cell` section edited in place. */
+  function withCells(edit: (cell: Uint32Array) => void): Uint8Array {
+    const buf = encodeModel(small.model);
+    const f = readHeader(buf).fields.find((x) => x.name === 'cell')!;
+    edit(new Uint32Array(buf.buffer, f.offset, f.length));
+    return buf;
+  }
+
+  it('cell indices that are not strictly increasing, or past the grid → BAD_DATA', () => {
+    const n = small.model.count;
+    const { nx, ny, nz } = small.model.grid;
+    expectThrowsCode(() => decodeModel(withCells((c) => (c[5] = c[4]))), 'BAD_DATA');
+    expectThrowsCode(() => decodeModel(withCells((c) => ([c[1], c[2]] = [c[2], c[1]]))), 'BAD_DATA');
+    expectThrowsCode(() => decodeModel(withCells((c) => (c[n - 1] = nx * ny * nz))), 'BAD_DATA');
+    expect(decodeModel(withCells(() => undefined)).count).toBe(n);
   });
 
   it('garbage header → BAD_HEADER; a model payload decoded as movement → WRONG_KIND', () => {
@@ -213,7 +232,7 @@ describe('BMV1 codec: typed errors', () => {
   const malformed: [string, 'model' | 'movement', Edit][] = [
     ['model grid missing', 'model', (h) => delete h.grid],
     ['model grid.origin not a Vec3', 'model', (h) => (sub(h, 'grid').origin = [0, 0])],
-    ['model grid dims disagree with count', 'model', (h) => (sub(h, 'grid').nz = 1)],
+    ['model count exceeds the grid', 'model', (h) => (sub(h, 'grid').nz = 1)],
     ['model grades null', 'model', (h) => (h.grades = null)],
     ['model configHash empty', 'model', (h) => (h.configHash = '')],
     ['movement surface missing', 'movement', (h) => delete h.surface],

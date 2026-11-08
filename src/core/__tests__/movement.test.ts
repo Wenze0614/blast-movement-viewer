@@ -3,7 +3,7 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getBlastConfig } from '../blasts';
-import { blockIndex, blockModelConfigHash, generateBlockModel, type BlockModelConfig } from '../blockModel';
+import { blockIdAt, blockModelConfigHash, generateBlockModel, type BlockModelConfig } from '../blockModel';
 import { DEFAULT_BLAST_PARAMETERS } from '../defaults';
 import { canonicalParams } from '../hash';
 import type { LensFeature } from '../orebody';
@@ -58,12 +58,29 @@ function meanHorizontal(r: Run, pred: (i: number, j: number, k: number) => boole
   for (let k = 0; k < nz; k++)
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
-        if (!pred(i, j, k)) continue;
-        const id = blockIndex(r.model.grid, i, j, k);
+        const id = blockIdAt(r.model, i, j, k);
+        if (id < 0 || !pred(i, j, k)) continue;
         s += Math.hypot(r.result.displacement[3 * id], r.result.displacement[3 * id + 1]);
         c++;
       }
   return s / c;
+}
+
+/**
+ * Free face east: per row j, the column index of its frontmost (largest i) and rearmost block.
+ * The outline is irregular, so the front row is not a fixed i.
+ */
+function rowEnds(model: BlockModel): { front: Int32Array; back: Int32Array } {
+  const { nx, ny } = model.grid;
+  const front = new Int32Array(ny).fill(-1);
+  const back = new Int32Array(ny).fill(nx);
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++)
+      if (blockIdAt(model, i, j, 0) >= 0) {
+        front[j] = Math.max(front[j], i);
+        back[j] = Math.min(back[j], i);
+      }
+  return { front, back };
 }
 
 let r017: Run;
@@ -141,17 +158,18 @@ describe('computeMovement (M3)', () => {
 
   it('(e) mean horizontal displacement is larger in the front row than the back row', () => {
     for (const r of [r017, r022]) {
-      const nx = r.model.grid.nx; // free face east: front row = i = nx − 1
-      const front = meanHorizontal(r, (i) => i === nx - 1);
-      const back = meanHorizontal(r, (i) => i === 0);
+      const ends = rowEnds(r.model); // free face east: front row = each row's largest i
+      const front = meanHorizontal(r, (i, j) => i === ends.front[j]);
+      const back = meanHorizontal(r, (i, j) => i === ends.back[j]);
       expect(front).toBeGreaterThan(back);
     }
   });
 
   it('throw magnitudes are in the planned range (front-row crest ≈ 6–10 m, toe ≈ 3–5 m)', () => {
-    const { nx, nz } = r017.model.grid;
-    const frontTop = meanHorizontal(r017, (i, _j, k) => i === nx - 1 && k === nz - 1);
-    const frontToe = meanHorizontal(r017, (i, _j, k) => i === nx - 1 && k === 0);
+    const { nz } = r017.model.grid;
+    const ends = rowEnds(r017.model);
+    const frontTop = meanHorizontal(r017, (i, j, k) => i === ends.front[j] && k === nz - 1);
+    const frontToe = meanHorizontal(r017, (i, j, k) => i === ends.front[j] && k === 0);
     expect(frontTop).toBeGreaterThan(6);
     expect(frontTop).toBeLessThan(11);
     expect(frontToe).toBeGreaterThan(2.5);
@@ -254,20 +272,26 @@ describe('computeMovement (M3)', () => {
 
   it('delay is in [0, 0.5] and front rows fire first', () => {
     const { model, result } = r017;
-    const { nx, ny, nz } = model.grid;
+    const { ny, nz } = model.grid;
+    const ends = rowEnds(model);
     let front = 0;
     let back = 0;
+    let rows = 0;
     for (let n = 0; n < model.count; n++) {
       expect(result.delay[n]).toBeGreaterThanOrEqual(0);
       expect(result.delay[n]).toBeLessThanOrEqual(0.5);
     }
     for (let k = 0; k < nz; k++)
       for (let j = 0; j < ny; j++) {
-        front += result.delay[blockIndex(model.grid, nx - 1, j, k)];
-        back += result.delay[blockIndex(model.grid, 0, j, k)];
+        if (ends.front[j] < 0) continue;
+        front += result.delay[blockIdAt(model, ends.front[j], j, k)];
+        back += result.delay[blockIdAt(model, ends.back[j], j, k)];
+        rows++;
       }
-    expect(front / (ny * nz)).toBeLessThan(0.1);
-    expect(back / (ny * nz)).toBeGreaterThan(0.4);
+    expect(front / rows).toBeLessThan(0.1);
+    // Rows are shorter than the footprint where the outline is ragged, so their back blocks are
+    // not all at the very back: still clearly later than the front.
+    expect(back / rows).toBeGreaterThan(0.3);
   });
 
   it('runs in < 50 ms for 3,840 blocks', () => {
@@ -306,6 +330,69 @@ describe('computeMovement (M3)', () => {
     }
     expect(seen.size).toBe(model.count);
     expect(r.stats.converged).toBe(true);
+  });
+});
+
+describe('computeMovement: irregular footprints', () => {
+  it('no block ends on unblasted rock: every occupied cell is free ground (validMask)', () => {
+    for (const r of [r017, r022, run('b1040-031')]) {
+      const { stats } = r;
+      for (let n = 0; n < r.model.count; n++) expect(stats.validMask[slot(r, n).cell]).toBe(1);
+      for (let c = 0; c < stats.validMask.length; c++) if (!stats.validMask[c]) expect(stats.stackCount[c]).toBe(0);
+    }
+  });
+
+  it('free ground = the blast footprint + the open floor in front of each strip\'s face', () => {
+    const { model, result, stats } = r022;
+    const g = result.postGrid;
+    // b1030-022 is an L: the back-left corner (x < 50, y > 40) is unblasted bench rock.
+    let rock = 0;
+    for (let iy = 0; iy < g.ny; iy++)
+      for (let ix = 0; ix < g.nx; ix++) {
+        const x = g.origin[0] + (ix + 0.5) * g.cellSize;
+        const y = g.origin[1] + (iy + 0.5) * g.cellSize;
+        const valid = stats.validMask[ix + g.nx * iy];
+        if (x < 48 && y > 42 && y < 60) {
+          expect(valid, `${x},${y}`).toBe(0);
+          rock++;
+        }
+        if (x > 101) expect(valid, `${x},${y} past the face`).toBe(1);
+        if (x < 99 && (y < 0 || y > 60)) expect(valid, `${x},${y} beside the blast`).toBe(0);
+      }
+    expect(rock).toBeGreaterThan(20);
+    // and no block landed in that corner
+    for (let n = 0; n < model.count; n++) {
+      const x = result.end[3 * n];
+      const y = result.end[3 * n + 1];
+      expect(x < 48 && y > 42).toBe(false);
+    }
+  });
+
+  it('throw is measured from each strip\'s own face: blocks at a recessed face still get front-row throw', () => {
+    // b1040-017's face is ragged (x ≈ 96–100): rows whose face is set back throw as far as the rest.
+    const { model } = r017;
+    const ends = rowEnds(model);
+    const nz = model.grid.nz;
+    const recessed = meanHorizontal(r017, (i, j, k) => i === ends.front[j] && ends.front[j] < 39 && k === nz - 1);
+    const flush = meanHorizontal(r017, (i, j, k) => i === ends.front[j] && ends.front[j] === 39 && k === nz - 1);
+    expect(Number.isFinite(recessed) && Number.isFinite(flush)).toBe(true);
+    expect(recessed).toBeGreaterThan(0.75 * flush);
+  });
+
+  it('a rectangular config (no outline) still fills its box and keeps the invariants', () => {
+    const rect = { ...getBlastConfig('b1040-017')!, outline: undefined };
+    const model = generateBlockModel(rect);
+    expect(model.count).toBe(3840);
+    const { result, stats } = computeMovementDetailed(model, P);
+    expect(stats.converged).toBe(true);
+    const r: Run = { model, result, stats };
+    const seen = new Set<string>();
+    for (let n = 0; n < model.count; n++) {
+      const sl = slot(r, n);
+      expect(stats.validMask[sl.cell]).toBe(1);
+      seen.add(`${sl.cell}:${sl.level}`);
+    }
+    expect(seen.size).toBe(model.count);
   });
 });
 
@@ -377,6 +464,7 @@ describe('computeMovement outputs', () => {
       const clone: BlockModelConfig = JSON.parse(JSON.stringify(base));
       const reordered: BlockModelConfig = {
         seed: base.seed,
+        outline: base.outline,
         orebody: Object.fromEntries(Object.entries(base.orebody).reverse()) as BlockModelConfig['orebody'],
         grades: Object.fromEntries(Object.entries(base.grades).reverse()) as BlockModelConfig['grades'],
         grid: Object.fromEntries(Object.entries(base.grid).reverse()) as BlockModelConfig['grid'],

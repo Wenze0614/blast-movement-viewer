@@ -1,13 +1,14 @@
 /**
  * The three seeded demo blasts (docs/02-plan.md ADR-10), shared by LocalDataSource and the API.
  *
- * | id        | model                         | ore body                                   |
- * |-----------|-------------------------------|--------------------------------------------|
- * | b1040-017 | 40×24×4 @ 2.5 m (3,840)       | single dipping lens crossing the throw     |
- * | b1030-022 | 40×24×4 @ 2.5 m (3,840)       | two pods with a waste parting              |
- * | b1040-031 | 80×48×8 @ 1.25 m (30,720)     | lens + high-grade shoot (performance demo) |
+ * | id        | bounding grid             | outline                    | ore body                         |
+ * |-----------|---------------------------|----------------------------|----------------------------------|
+ * | b1040-017 | 40×24×4 @ 2.5 m           | irregular, ragged face     | single dipping lens across throw |
+ * | b1030-022 | 40×24×4 @ 2.5 m           | L-shape (narrow back)      | two pods with a waste parting    |
+ * | b1040-031 | 80×48×8 @ 1.25 m          | notched, chamfered corner  | lens + high-grade shoot (dense)  |
  *
- * All benches are 100 × 60 × 10 m with the free face on the east side (throw = +x).
+ * Each grid is a 100 × 60 × 10 m bounding box; the outline (plan polygon, world x/y) picks the
+ * block columns (blockCount in the summary). The free face is on the east side (throw = +x).
  * Bench "1040" has its crest at RL 1040 and its toe (benchRL, grid origin z) at RL 1030.
  */
 import type { BlastPattern } from './api-types';
@@ -57,6 +58,7 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
     grid: { origin: [0, 0, 1030], blockSize: [2.5, 2.5, 2.5], nx: 40, ny: 24, nz: 4 },
     grades: { ...DEFAULT_GRADE_SETTINGS },
     seed: 1040017,
+    outline: [[6, 8], [30, 2], [62, 5], [100, 1], [98, 22], [100, 44], [96, 59], [64, 56], [38, 60], [12, 54], [2, 34]],
     orebody: {
       ...BASE_OREBODY,
       features: [
@@ -83,6 +85,7 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
     grid: { origin: [0, 0, 1020], blockSize: [2.5, 2.5, 2.5], nx: 40, ny: 24, nz: 4 },
     grades: { ...DEFAULT_GRADE_SETTINGS },
     seed: 1030022,
+    outline: [[0, 0], [100, 0], [100, 60], [52, 60], [50, 40], [24, 38], [0, 30]],
     orebody: {
       ...BASE_OREBODY,
       features: [
@@ -101,6 +104,7 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
     grid: { origin: [0, 0, 1030], blockSize: [1.25, 1.25, 1.25], nx: 80, ny: 48, nz: 8 },
     grades: { ...DEFAULT_GRADE_SETTINGS },
     seed: 1040031,
+    outline: [[10, 0], [88, 0], [100, 8], [100, 60], [46, 60], [40, 50], [18, 48], [0, 36], [0, 14]],
     orebody: {
       ...BASE_OREBODY,
       features: [

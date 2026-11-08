@@ -45,7 +45,7 @@ describe('GET /api/health and /api/blasts', () => {
     expect(res.headers.get('cache-control')).toBe('public, s-maxage=3600');
     const body = (await res.json()) as BlastSummary[];
     expect(body.map((b) => b.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
-    expect(body[2].blockCount).toBe(30720);
+    expect(body[2].blockCount).toBe(27088);
   });
 });
 

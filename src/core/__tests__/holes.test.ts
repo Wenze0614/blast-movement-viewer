@@ -3,23 +3,43 @@
  */
 import { describe, expect, it } from 'vitest';
 import { BLAST_CONFIGS, getBlastConfig } from '../blasts';
-import { generateBlockModel } from '../blockModel';
+import { blockIdAt, generateBlockModel } from '../blockModel';
+import { pointInRing } from '../geometry';
 import { BLAST_DISCLAIMER, buildBlastDetail, buildBlastSummary, generateHoles } from '../holes';
 
 const cfg = getBlastConfig('b1040-017')!;
 const model = generateBlockModel(cfg);
 const holes = generateHoles(model, cfg.pattern, cfg.freeFace);
+const rect = { ...cfg, outline: undefined };
+const rectHoles = generateHoles(generateBlockModel(rect), rect.pattern, rect.freeFace);
 
 describe('generateHoles', () => {
-  it('lays out rows × holesPerRow holes (25 × 13 = 325) with R07-H03 style ids', () => {
-    expect(holes.length).toBe(325);
-    expect(new Set(holes.map((h) => h.id)).size).toBe(325);
-    expect(holes[0].id).toBe('R00-H00');
-    expect(holes.find((h) => h.row === 7 && h.id.endsWith('H03'))?.id).toBe('R07-H03');
+  it('a rectangular blast gets the full rows × holesPerRow pattern (25 × 13 = 325) with R07-H03 style ids', () => {
+    expect(rectHoles.length).toBe(325);
+    expect(new Set(rectHoles.map((h) => h.id)).size).toBe(325);
+    expect(rectHoles[0].id).toBe('R00-H00');
+    expect(rectHoles.find((h) => h.row === 7 && h.id.endsWith('H03'))?.id).toBe('R07-H03');
+  });
+
+  it('an outlined blast drills only the pattern positions over its blocks (ids keep their pattern slot)', () => {
+    expect(holes.length).toBe(258);
+    const kept = new Set(holes.map((h) => h.id));
+    for (const h of rectHoles) {
+      const [x, y] = h.collar;
+      const i = Math.floor(x / 2.5);
+      const j = Math.floor(y / 2.5);
+      expect(kept.has(h.id), h.id).toBe(blockIdAt(model, i, j, 0) >= 0);
+    }
+    // collars sit over columns whose centres are inside the outline
+    for (const h of holes) {
+      const cx = (Math.floor(h.collar[0] / 2.5) + 0.5) * 2.5;
+      const cy = (Math.floor(h.collar[1] / 2.5) + 0.5) * 2.5;
+      expect(pointInRing(cx, cy, cfg.outline!), h.id).toBe(true);
+    }
   });
 
   it('row 0 is nearest the free face (east) and rows are one burden apart', () => {
-    const rowX = (r: number) => holes.find((h) => h.row === r)!.collar[0];
+    const rowX = (r: number) => rectHoles.find((h) => h.row === r)!.collar[0];
     expect(rowX(0)).toBeGreaterThan(rowX(1));
     expect(rowX(0) - rowX(1)).toBeCloseTo(cfg.pattern.burden, 10);
     expect(rowX(0)).toBeLessThan(100);
@@ -36,7 +56,7 @@ describe('generateHoles', () => {
   });
 
   it('sampledGrade = column mean of the model + noise (correlates with the ore body)', () => {
-    const { nx, ny, nz } = model.grid;
+    const { nz } = model.grid;
     let errSum = 0;
     for (const h of holes) {
       const i = Math.floor(h.collar[0] / 2.5);
@@ -44,7 +64,7 @@ describe('generateHoles', () => {
       let tg = 0;
       let t = 0;
       for (let k = 0; k < nz; k++) {
-        const id = i + nx * (j + ny * k);
+        const id = blockIdAt(model, i, j, k);
         tg += model.tonnes[id] * model.grade[id];
         t += model.tonnes[id];
       }
@@ -70,11 +90,13 @@ describe('BlastSummary / BlastDetail builders', () => {
       id: 'b1040-017',
       name: 'Bench 1040 · Blast 017',
       description: 'Single dipping lens crossing the throw direction',
-      blockCount: 3840,
+      blockCount: 3200,
       benchRL: 1030,
       freeFace: 'east',
     });
-    expect(s.map((x) => x.blockCount)).toEqual([3840, 3840, 30720]);
+    expect(s.map((x) => x.blockCount)).toEqual([3200, 3088, 27088]);
+    // the summary's count (computed from the outline) is the generated model's
+    expect(s.map((x) => x.blockCount)).toEqual(BLAST_CONFIGS.map((c) => generateBlockModel(c).count));
     expect(s[1].benchRL).toBe(1020);
   });
 

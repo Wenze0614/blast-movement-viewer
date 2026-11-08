@@ -101,7 +101,7 @@ describe('ApiDataSource through the route handlers', () => {
     pipeline.dispose();
   });
 
-  it('switching blast loads all three, including the 30,720-block dense blast', async () => {
+  it('switching blast loads all three, including the 27,088-block dense blast', async () => {
     const { store, pipeline } = setup();
     await pipeline.settled;
     for (const id of ['b1030-022', 'b1040-031']) {
@@ -112,7 +112,7 @@ describe('ApiDataSource through the route handlers', () => {
       expect(store.getState().movement).not.toBeNull();
       expect(store.getState().source).toBe('api');
     }
-    expect(store.getState().model!.count).toBe(30720);
+    expect(store.getState().model!.count).toBe(27088);
     pipeline.dispose();
   });
 

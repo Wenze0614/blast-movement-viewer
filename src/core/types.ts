@@ -22,6 +22,10 @@ export enum RockType {
   Mineralised = 1,
 }
 
+/**
+ * The block model's bounding grid. A blast's blocks fill only the columns inside its outline, so
+ * the grid is a bounding box: `nx·ny·nz` cells, of which `BlockModel.count` hold a block.
+ */
 export interface GridSpec {
   /** MIN CORNER of the first block (Datamine convention), e.g. [0, 0, 1030]. */
   origin: Vec3;
@@ -42,12 +46,18 @@ export interface GradeSettings {
   highGrade: number;
 }
 
-/** Storage: struct-of-arrays. Index: id = i + nx * (j + ny * k) */
+/**
+ * Storage: struct-of-arrays over the PRESENT blocks only (sparse). Block id = array index
+ * 0..count-1; `cell[id]` is the block's grid cell i + nx * (j + ny * k), strictly increasing, so
+ * ids run flitch by flitch (k), then row (j), then column (i), like the dense grid order.
+ */
 export interface BlockModel {
   grid: GridSpec;
   grades: GradeSettings;
-  /** e.g. 3840 */
+  /** Blocks present (≤ nx·ny·nz), e.g. 3,052 inside an irregular outline. */
   count: number;
+  /** count; grid cell index i + nx * (j + ny * k) of each block, strictly increasing. */
+  cell: Uint32Array;
   /** 3 * count, m (block centres). */
   centroid: Float32Array;
   /** g/t Au, e.g. 0.12 .. 6.0 */

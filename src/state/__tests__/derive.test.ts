@@ -167,8 +167,8 @@ describe('data pipeline (blast → model → movement → derived)', () => {
     await pipeline.settled;
     const s = store.getState();
     expect(s.blast?.id).toBe('b1040-017');
-    expect(s.model?.count).toBe(3840);
-    expect(s.movement?.start.length).toBe(3 * 3840);
+    expect(s.model?.count).toBe(3200);
+    expect(s.movement?.start.length).toBe(3 * 3200);
     expect(s.polygons?.adjusted.kind).toBe('adjusted');
     expect(s.reconciliation?.post_original.scenario).toBe('post_original');
     expect(s).toMatchObject({ status: 'ready', source: 'local', error: null });

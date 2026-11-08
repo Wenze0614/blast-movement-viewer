@@ -6,15 +6,17 @@
  * offset 0   "BMV1"                      4 bytes magic
  * offset 4   header byte length H        uint32 little-endian, H % 4 === 0
  * offset 8   header JSON (UTF-8)         padded with spaces to H bytes
- * offset 8+H sections                    each 4-byte aligned; all Float32 before all Uint8
+ * offset 8+H sections                    each 4-byte aligned; Float32, then Uint32, then Uint8
  * ```
  *
  * The header lists every section as `{ name, type, offset, length }` with `offset` in bytes from
  * the START OF THE PAYLOAD and `length` in elements. Decode returns typed-array VIEWS on the input
  * buffer (no copies), so a decoded model goes straight to GPU attributes.
  *
- * - model:    centroid (f32 3N), grade, density, tonnes (f32 N), rockType, oreClass (u8 N).
- *             Header: count, grid, grades, seed, configHash (computeMovement needs it, ADR-12).
+ * - model:    centroid (f32 3N), grade, density, tonnes (f32 N), cell (u32 N), rockType,
+ *             oreClass (u8 N). Header: count, grid (the bounding grid: count ≤ nx·ny·nz),
+ *             grades, seed, configHash (computeMovement needs it, ADR-12). `cell` holds each
+ *             block's grid cell index, strictly increasing (schema v2: sparse models).
  * - movement: end (f32 3N), delay (f32 N), surface.height (f32 nx·ny).
  *             Header: count, params, paramsHash, looseScale, postGrid, surface spec and the model
  *             configHash it was computed from. `start` is the model's centroid; `displacement`
@@ -26,7 +28,8 @@
 import type { BlastParameters, BlockModel, GradeSettings, GridSpec, MovementResult, Vec2 } from './types';
 
 export const BMV1_MAGIC = 'BMV1';
-export const BMV1_SCHEMA_VERSION = 1;
+/** v2: sparse models (the `cell` section). v1 payloads are rejected (UNSUPPORTED_VERSION). */
+export const BMV1_SCHEMA_VERSION = 2;
 /** Bytes before the header JSON: magic + uint32 header length. */
 const PREAMBLE = 8;
 
@@ -35,6 +38,8 @@ export type CodecErrorCode =
   | 'TRUNCATED'
   | 'UNSUPPORTED_VERSION'
   | 'BAD_HEADER'
+  /** A section's contents break an invariant (e.g. `cell` not strictly increasing). */
+  | 'BAD_DATA'
   | 'WRONG_KIND'
   | 'MODEL_MISMATCH'
   | 'UNSUPPORTED_PLATFORM';
@@ -49,7 +54,7 @@ export class CodecError extends Error {
   }
 }
 
-export type FieldType = 'f32' | 'u8';
+export type FieldType = 'f32' | 'u32' | 'u8';
 
 export interface FieldSpec {
   name: string;
@@ -90,7 +95,7 @@ export type Bmv1Header = ModelHeader | MovementHeader;
 /** What a caller supplies to encode(): a header without the codec-owned keys. */
 type HeaderMeta = Omit<ModelHeader, 'schemaVersion' | 'fields'> | Omit<MovementHeader, 'schemaVersion' | 'fields'>;
 
-const BYTES: Record<FieldType, number> = { f32: 4, u8: 1 };
+const BYTES: Record<FieldType, number> = { f32: 4, u32: 4, u8: 1 };
 const align4 = (n: number) => (n + 3) & ~3;
 
 function assertLittleEndian(): void {
@@ -99,15 +104,17 @@ function assertLittleEndian(): void {
   }
 }
 
-type Section = { name: string; data: Float32Array | Uint8Array };
+type SectionData = Float32Array | Uint32Array | Uint8Array;
+type Section = { name: string; data: SectionData };
 
-/** Lay out sections (Float32 first, then Uint8; each 4-byte aligned) behind a padded JSON header. */
+const typeOf = (data: SectionData): FieldType =>
+  data instanceof Float32Array ? 'f32' : data instanceof Uint32Array ? 'u32' : 'u8';
+const SECTION_ORDER: readonly FieldType[] = ['f32', 'u32', 'u8'];
+
+/** Lay out sections (Float32, Uint32, then Uint8; each 4-byte aligned) behind a padded JSON header. */
 function encode(meta: HeaderMeta, sections: Section[]): Uint8Array<ArrayBuffer> {
   assertLittleEndian();
-  const ordered = [
-    ...sections.filter((s) => s.data instanceof Float32Array),
-    ...sections.filter((s) => s.data instanceof Uint8Array),
-  ];
+  const ordered = SECTION_ORDER.flatMap((t) => sections.filter((s) => typeOf(s.data) === t));
   const enc = new TextEncoder();
   // Offsets depend on the header length, which depends on the offsets: iterate until stable
   // (converges in ≤ 2 rounds since the digits of the offsets only grow).
@@ -117,7 +124,7 @@ function encode(meta: HeaderMeta, sections: Section[]): Uint8Array<ArrayBuffer> 
   for (let round = 0; round < 8; round++) {
     let cursor = PREAMBLE + headerBytes;
     fields = ordered.map((s) => {
-      const type: FieldType = s.data instanceof Float32Array ? 'f32' : 'u8';
+      const type = typeOf(s.data);
       const f = { name: s.name, type, offset: cursor, length: s.data.length };
       cursor = align4(cursor + s.data.byteLength);
       return f;
@@ -138,6 +145,7 @@ function encode(meta: HeaderMeta, sections: Section[]): Uint8Array<ArrayBuffer> 
   ordered.forEach((s, i) => {
     const f = fields[i];
     if (s.data instanceof Float32Array) new Float32Array(out.buffer, f.offset, f.length).set(s.data);
+    else if (s.data instanceof Uint32Array) new Uint32Array(out.buffer, f.offset, f.length).set(s.data);
     else out.set(s.data, f.offset);
   });
   return out;
@@ -152,6 +160,7 @@ export function encodeModel(model: BlockModel): Uint8Array<ArrayBuffer> {
       { name: 'grade', data: model.grade },
       { name: 'density', data: model.density },
       { name: 'tonnes', data: model.tonnes },
+      { name: 'cell', data: model.cell },
       { name: 'rockType', data: model.rockType },
       { name: 'oreClass', data: model.oreClass },
     ],
@@ -227,7 +236,7 @@ function parseHeader(buffer: ArrayBuffer, base: number, byteLength: number): Bmv
   if (!Array.isArray(header.fields)) throw new CodecError('BAD_HEADER', 'fields must be an array');
   const dataStart = PREAMBLE + headerBytes;
   for (const f of header.fields) {
-    if (f.type !== 'f32' && f.type !== 'u8') throw new CodecError('BAD_HEADER', `field ${f.name}: unknown type ${String(f.type)}`);
+    if (f.type !== 'f32' && f.type !== 'u32' && f.type !== 'u8') throw new CodecError('BAD_HEADER', `field ${f.name}: unknown type ${String(f.type)}`);
     if (!Number.isInteger(f.offset) || f.offset < dataStart || f.offset % 4 !== 0) {
       throw new CodecError('BAD_HEADER', `field ${f.name}: offset ${f.offset} is not an aligned section offset`);
     }
@@ -242,15 +251,20 @@ function parseHeader(buffer: ArrayBuffer, base: number, byteLength: number): Bmv
 
 /** Typed-array views for the named sections, checking type and element count. */
 function views(buffer: ArrayBuffer, base: number, header: Bmv1Header, expect: Record<string, [FieldType, number]>) {
-  const out: Record<string, Float32Array | Uint8Array> = {};
+  const out: Record<string, SectionData> = {};
   for (const [name, [type, length]] of Object.entries(expect)) {
     const f = header.fields.find((x) => x.name === name);
     if (!f) throw new CodecError('BAD_HEADER', `missing field ${name}`);
     if (f.type !== type || f.length !== length) {
       throw new CodecError('BAD_HEADER', `field ${name}: expected ${type}[${length}], got ${f.type}[${f.length}]`);
     }
+    const at = base + f.offset;
     out[name] =
-      type === 'f32' ? new Float32Array(buffer, base + f.offset, length) : new Uint8Array(buffer, base + f.offset, length);
+      type === 'f32'
+        ? new Float32Array(buffer, at, length)
+        : type === 'u32'
+          ? new Uint32Array(buffer, at, length)
+          : new Uint8Array(buffer, at, length);
   }
   return out;
 }
@@ -296,7 +310,7 @@ function checkModelHeader(h: ModelHeader): void {
   uint(g.nx, 'grid.nx');
   uint(g.ny, 'grid.ny');
   uint(g.nz, 'grid.nz');
-  if ((g.nx as number) * (g.ny as number) * (g.nz as number) !== h.count) bad('grid.nx * ny * nz must equal count');
+  if (h.count > (g.nx as number) * (g.ny as number) * (g.nz as number)) bad('count must be <= grid.nx * ny * nz');
   const gr = obj(h.grades, 'grades');
   num(gr.cutoff, 'grades.cutoff');
   num(gr.highGrade, 'grades.highGrade');
@@ -332,13 +346,23 @@ export function decodeModel(input: Input): BlockModel {
     grade: ['f32', n],
     density: ['f32', n],
     tonnes: ['f32', n],
+    cell: ['u32', n],
     rockType: ['u8', n],
     oreClass: ['u8', n],
   });
+  const cell = v.cell as Uint32Array;
+  const { nx, ny, nz } = header.grid;
+  const cells = nx * ny * nz;
+  for (let b = 0; b < n; b++) {
+    if (cell[b] >= cells || (b > 0 && cell[b] <= cell[b - 1])) {
+      throw new CodecError('BAD_DATA', `cell[${b}] = ${cell[b]} is not a strictly increasing grid cell index`);
+    }
+  }
   return {
     grid: header.grid,
     grades: header.grades,
     count: n,
+    cell,
     centroid: v.centroid as Float32Array,
     grade: v.grade as Float32Array,
     density: v.density as Float32Array,

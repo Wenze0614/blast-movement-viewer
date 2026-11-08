@@ -10,9 +10,11 @@
 import type { BlastDetail, BlastSummary } from '@/core/api-types';
 import type { BlastParameters, BlockModel, MovementResult } from '@/core/types';
 import { ApiDataSource, FallbackDataSource, type ApiDataSourceOptions } from './api';
+import { defaultCompute } from './computeClient';
 import { LocalDataSource } from './local';
 
 export { LocalDataSource, isAbortError } from './local';
+export { inlineCompute, workerCompute, type LocalCompute } from './computeClient';
 export { ApiDataSource, ApiRequestError, FallbackDataSource, modelPath, movementPath } from './api';
 export type { ApiDataSourceOptions } from './api';
 
@@ -44,8 +46,10 @@ export interface CreateDataSourceOptions {
  */
 export function createDataSource(options: CreateDataSourceOptions = {}): DataSource {
   const kind = options.kind ?? parseKind(process.env.NEXT_PUBLIC_DATA_SOURCE) ?? 'api';
-  if (kind === 'local') return new LocalDataSource();
-  return new FallbackDataSource(new ApiDataSource(options.api), new LocalDataSource(), options.onFallback);
+  // One compute (a Web Worker in the browser) shared by the local source and the API's fallback.
+  const compute = defaultCompute();
+  if (kind === 'local') return new LocalDataSource(compute);
+  return new FallbackDataSource(new ApiDataSource(options.api), new LocalDataSource(compute), options.onFallback);
 }
 
 function parseKind(value: string | undefined): DataSourceKind | undefined {

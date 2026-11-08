@@ -1,13 +1,13 @@
 /**
  * LocalDataSource (docs/02-plan.md ADR-9, M10): runs src/core in the browser with the shared demo
  * blast configs (core/blasts.ts). Same deterministic code as the API, so results are identical.
+ * Where core runs (inline or in a Web Worker) is a LocalCompute (computeClient.ts).
  */
 import { BLAST_CONFIGS, getBlastConfig, type BlastConfig } from '@/core/blasts';
-import { generateBlockModel } from '@/core/blockModel';
-import { buildBlastDetail, buildBlastSummary } from '@/core/holes';
-import { computeMovement } from '@/core/movement';
+import { buildBlastSummary } from '@/core/holes';
 import type { BlastDetail, BlastSummary } from '@/core/api-types';
 import type { BlastParameters, BlockModel, MovementResult } from '@/core/types';
+import { inlineCompute, type LocalCompute } from './computeClient';
 import type { DataSource } from './index';
 
 /** A DOMException named 'AbortError', like fetch() rejects with. */
@@ -23,13 +23,17 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError();
 }
 
-/** Yield to the event loop so a synchronous compute doesn't block an abort that is already queued. */
-const nextTick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-
 export class LocalDataSource implements DataSource {
   readonly kind = 'local' as const;
-  /** Models are deterministic per config, so generate each once. */
-  private readonly models = new Map<string, BlockModel>();
+  private readonly compute: LocalCompute;
+
+  /**
+   * `compute`: where core runs. Inline by default (tests, the pipeline's last resort); the app
+   * passes a Web Worker compute (createDataSource) so large blasts never block the main thread.
+   */
+  constructor(compute: LocalCompute = inlineCompute()) {
+    this.compute = compute;
+  }
 
   private config(id: string): BlastConfig {
     const cfg = getBlastConfig(id);
@@ -37,36 +41,51 @@ export class LocalDataSource implements DataSource {
     return cfg;
   }
 
-  private model(id: string): BlockModel {
-    let model = this.models.get(id);
-    if (!model) {
-      model = generateBlockModel(this.config(id));
-      this.models.set(id, model);
-    }
-    return model;
-  }
-
   async listBlasts(): Promise<BlastSummary[]> {
     return BLAST_CONFIGS.map(buildBlastSummary);
   }
 
   async getBlast(id: string): Promise<BlastDetail> {
-    return buildBlastDetail(this.config(id), this.model(id));
+    this.config(id);
+    return this.compute.detail(id);
   }
 
   async getModel(id: string, signal?: AbortSignal): Promise<BlockModel> {
     throwIfAborted(signal);
-    await nextTick();
+    this.config(id);
+    const model = await abortable(this.compute.model(id), signal);
     throwIfAborted(signal);
-    return this.model(id);
+    return model;
   }
 
   async getMovement(id: string, params: BlastParameters, signal?: AbortSignal): Promise<MovementResult> {
     throwIfAborted(signal);
-    await nextTick();
-    throwIfAborted(signal);
-    const result = computeMovement(this.model(id), params);
+    this.config(id);
+    const result = await abortable(this.compute.movement(id, params), signal);
     throwIfAborted(signal);
     return result;
   }
+}
+
+/**
+ * Settle with `work`, or reject with an AbortError as soon as `signal` aborts (the work itself runs
+ * to completion in the background and its result is dropped).
+ */
+function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    if (signal.aborted) return onAbort();
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
 }

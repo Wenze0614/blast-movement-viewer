@@ -9,13 +9,16 @@ for the original and the movement-adjusted dig lines.
 > deliberately simple stand-in for the engine's output; the showcase is the visualisation, the
 > interaction and the data plumbing."*
 
-**Live demo:** TODO (deploy URL) · **Repo:** <https://github.com/Wenze0614/blast-movement-viewer>
+**Repo:** <https://github.com/Wenze0614/blast-movement-viewer>
 
-![Blast animation: bench, blastholes and dig lines, then the muckpile](docs/media/TODO-blast.gif)
-<!-- TODO: record docs/media/TODO-blast.gif (≈ 8 s: bench with holes → Blast → settled muckpile). -->
+Live demo: link added after first deploy.
 
-![Outcome colours with original and adjusted dig lines, and the reconciliation table](docs/media/TODO-outcome.png)
-<!-- TODO: capture docs/media/TODO-outcome.png (outcome mode after the blast, panel visible). -->
+<!--
+Media to capture in a browser (not yet recorded); add the image links once the files exist:
+- docs/media/demo.gif: ≈ 8 s, bench with holes → Blast → settled muckpile.
+- docs/media/screenshot.png: outcome colours after the blast, original and adjusted dig lines,
+  reconciliation panel visible.
+-->
 
 ## What it shows
 
@@ -161,8 +164,9 @@ The UI and engine never call `fetch`. They go through one `DataSource` interface
 - The load pipeline aborts superseded loads and ignores their late results and errors. It applies
   a movement **only to the model it was computed for** (`paramsHash` binds the model's config hash
   and the params). On a mismatch it reloads a consistent pair; as a last resort it computes blast
-  detail, model and movement locally, shown as "Local fallback". The blast detail, and so the hole
-  layer, always comes from the same source as the model.
+  detail, model and movement locally, shown as "Local fallback". Before any model is stored, from
+  either source, the blast detail (and so the hole layer) is checked against it and rebuilt or
+  refetched if its holes were not generated from that model.
 
 ## Movement heuristic (stand-in for an engine)
 
@@ -177,8 +181,15 @@ With s = distance from the free face ÷ bench length (0 = front row) and h = hei
    size c·k and clamped behind the back wall.
 3. **Stacking.** Each cell stacks its blocks by original elevation, so nothing floats or overlaps.
    Loose volume = swell × bank volume exactly (unit-tested).
-4. **Angle of repose.** Columns steeper than tan(φ)·c′ shed their top block to the lowest
-   neighbour until stable.
+4. **Angle of repose.** The tallest offending stack moves its top block to the lowest valid
+   neighbour, repeatedly. A stack offends when, along a grid axis, the drop to a cell up to
+   6 cells away (d = 1…6) exceeds the allowed drop `max(1, round(d · tan(φ) · c′ / (H_b·k)))`
+   blocks, i.e. the **rounded average slope** over that baseline is steeper than φ. Relaxation
+   stops when nothing offends or after **20·N block moves** (N = block count), whichever is first.
+   Why not the literal rule (each adjacent pair within tan(φ)·c′): with cubic blocks one block step
+   over one cell is already a 45° slope, so for φ < 45° no pair of unequal neighbours could ever
+   satisfy it and the piles would oscillate. Every allowed drop is ≥ 1 block, so each move lowers a
+   block and the relaxation terminates (`allowedDrop` in `src/core/movement.ts`).
 5. **Animation delay.** Front rows start first (visual only).
 
 **Known simplifications:** no timing, explosive or rock physics; vertical order is preserved within

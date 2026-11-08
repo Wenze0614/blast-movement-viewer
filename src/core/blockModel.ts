@@ -44,7 +44,7 @@ export interface BlockModelConfig {
  * change alters generated grades/densities for the SAME config, so cached results keyed on
  * `configHash` (ADR-12 immutable CDN responses) are invalidated.
  */
-export const MODEL_GENERATOR_VERSION = 3;
+export const MODEL_GENERATOR_VERSION = 4;
 
 /**
  * Canonical hash of everything that determines a block model: generator version, grid, grade

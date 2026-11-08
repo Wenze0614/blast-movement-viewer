@@ -295,8 +295,10 @@ What makes 2 million blocks work:
   cells, and checks a block's whole throw against one bounding box first, so most free-path checks
   are a single lookup (4.3 s → 1.7 s).
 - **Generation** computes each vein's plan geometry once per column and skips the vein noise far
-  from every vein, where its contribution is below Float32 resolution (2.1 s → 1.1 s, byte-identical
-  grades).
+  from every vein, where its contribution is below Float32 resolution (2.1 s → 1.1 s). That left the
+  four demo blasts byte-identical, but it can flip a Float32 rounding that sits on a boundary (one
+  block of one test seed did), so the generator version was bumped and a golden test pins grades
+  to it.
 - **Rendering**: each block is three faces turned toward the camera in the vertex shader (a box never
   shows more than three), so 2 M blocks are 12.5 M triangles instead of 25 M, still one draw call.
   The terrain mesh uses a whole multiple of a small block size (62 k vertices instead of 549 k).

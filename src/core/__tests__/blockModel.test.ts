@@ -13,8 +13,10 @@ import {
   configBlockCount,
   generateBlockModel,
   getBlock,
+  MODEL_GENERATOR_VERSION,
   oreTonnesFraction,
 } from '../blockModel';
+import { fnv1a64 } from '../hash';
 import { DEFAULT_GRADE_SETTINGS } from '../defaults';
 import { pointInRing } from '../geometry';
 import { OreClass, RockType } from '../types';
@@ -196,5 +198,32 @@ describe('demo blasts (ADR-10)', () => {
     expect(colMax(40, 22)).toBeGreaterThan(1.5);
     expect(colMax(72, 37)).toBeGreaterThan(1.5);
     expect(colMax(56, 29.5)).toBeLessThan(0.5);
+  });
+});
+
+describe('generator version guard (ADR-12: same configHash ⇒ same bytes)', () => {
+  /**
+   * Golden grade hashes for MODEL_GENERATOR_VERSION. If generated grades change for the same
+   * config, this fails: bump MODEL_GENERATOR_VERSION (so every configHash and cached response
+   * changes) and update the goldens together. v4 = the per-column vein cache and noise cut-offs,
+   * which flip a few Float32 roundings, e.g. b1040-031 at seed 19, block 3450:
+   * 0.1121239885687828 (v3) → 0.11212398111820221 (v4).
+   */
+  const hex = (a: Float32Array) => Array.from(new Uint8Array(a.buffer, a.byteOffset, a.byteLength), (b) => b.toString(16).padStart(2, '0')).join('');
+  const GOLDEN = {
+    version: 4,
+    'b1040-017': '53e6774a6958f2d8',
+    'b1040-031@19': '2919494c6afda5da',
+    'b1040-031': 'cf78fe9d722c1e97',
+  };
+
+  it('grades match the goldens of the current generator version', () => {
+    expect(MODEL_GENERATOR_VERSION).toBe(GOLDEN.version);
+    const dense = getBlastConfig('b1040-031')!;
+    expect(fnv1a64(hex(generateBlockModel(cfg017).grade))).toBe(GOLDEN['b1040-017']);
+    expect(fnv1a64(hex(generateBlockModel(dense).grade))).toBe(GOLDEN['b1040-031']);
+    const seed19 = generateBlockModel({ ...dense, seed: 19 });
+    expect(fnv1a64(hex(seed19.grade))).toBe(GOLDEN['b1040-031@19']);
+    expect(seed19.grade[3450]).toBe(Math.fround(0.11212398111820221));
   });
 });

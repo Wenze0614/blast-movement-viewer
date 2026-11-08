@@ -463,6 +463,21 @@ function checkModelHeader(h: ModelHeader): void {
   }
   for (const k of ['holeDiameterMm', 'subdrill'] as const) num(pt[k], `pattern.${k}`);
   for (const k of ['rows', 'holesPerRow'] as const) uint(pt[k], `pattern.${k}`);
+  if (h.byRock !== null && h.byRock !== undefined) {
+    // Density and tonnes per rock type: both tables, the same non-zero length, finite values ≥ 0.
+    // (Coverage of every rock type in the payload is checked per block in decodeModel.)
+    const br = obj(h.byRock, 'byRock');
+    const d = br.density;
+    const t = br.tonnes;
+    if (!Array.isArray(d) || !Array.isArray(t) || d.length === 0 || d.length !== t.length) {
+      bad('byRock.density and byRock.tonnes must be arrays of the same non-zero length');
+    }
+    for (const [name, arr] of [['density', d], ['tonnes', t]] as const) {
+      (arr as unknown[]).forEach((v, i) => {
+        if (!isNum(v) || v < 0) bad(`byRock.${name}[${i}] must be a finite number >= 0`);
+      });
+    }
+  }
   num(h.seed, 'seed');
   str(h.configHash, 'configHash');
 }
@@ -511,7 +526,9 @@ export function decodeModel(input: Input): BlockModel {
     tonnes = new Float32Array(n);
     for (let b = 0; b < n; b++) {
       const r = rockType[b];
-      if (r >= byRock.density.length) throw new CodecError('BAD_DATA', `rockType[${b}] = ${r} has no byRock entry`);
+      if (r >= byRock.density.length || r >= byRock.tonnes.length) {
+        throw new CodecError('BAD_DATA', `rockType[${b}] = ${r} has no byRock entry`);
+      }
       density[b] = byRock.density[r];
       tonnes[b] = byRock.tonnes[r];
     }

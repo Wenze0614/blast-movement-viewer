@@ -223,6 +223,13 @@ describe('BMV1 codec: typed errors', () => {
     return buf;
   }
 
+  it('a rock type the byRock tables do not cover → BAD_DATA (never NaN tonnes)', () => {
+    const buf = encodeModel(small.model);
+    const f = readHeader(buf).fields.find((x) => x.name === 'rockType')!;
+    new Uint8Array(buf.buffer, f.offset, f.length)[0] = 7;
+    expectThrowsCode(() => decodeModel(buf), 'BAD_DATA');
+  });
+
   it('cell indices that are not strictly increasing, or past the grid → BAD_DATA', () => {
     const n = small.model.count;
     const { nx, ny, nz } = small.model.grid;
@@ -262,6 +269,11 @@ describe('BMV1 codec: typed errors', () => {
     ['model grades null', 'model', (h) => (h.grades = null)],
     ['model grades without mediumGrade', 'model', (h) => delete sub(h, 'grades').mediumGrade],
     ['model grade breaks out of order', 'model', (h) => (sub(h, 'grades').mediumGrade = 9)],
+    ['model byRock an empty object (Codex review)', 'model', (h) => (h.byRock = {})],
+    ['model byRock.tonnes empty: would decode NaN tonnes', 'model', (h) => (sub(h, 'byRock').tonnes = [])],
+    ['model byRock tables of different lengths', 'model', (h) => (sub(h, 'byRock').density = [2.65])],
+    ['model byRock entry not a number', 'model', (h) => ((sub(h, 'byRock').tonnes as unknown[])[0] = 'x')],
+    ['model byRock negative density', 'model', (h) => ((sub(h, 'byRock').density as number[])[1] = -1)],
     ['model configHash empty', 'model', (h) => (h.configHash = '')],
     ['movement surface missing', 'movement', (h) => delete h.surface],
     ['movement postGrid a string', 'movement', (h) => (h.postGrid = 'x')],

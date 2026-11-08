@@ -50,9 +50,14 @@ export function inlineCompute(): LocalCompute {
 /**
  * Runs core in a Web Worker. Requests are answered in order; a model is generated once and kept in
  * the worker (models it posts are copies, so the main thread caches its own per blast id).
+ *
+ * A worker that fails (its script cannot load, it crashes) is done for: requests pending at that
+ * moment reject, and every later call runs on `fallback` (inline by default), so the app keeps
+ * working without ever posting to a dead worker.
  */
-export function workerCompute(worker: Worker): LocalCompute {
+export function workerCompute(worker: Worker, fallback: () => LocalCompute = inlineCompute): LocalCompute {
   let next = 1;
+  let failed: LocalCompute | null = null;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   const models = new Map<string, Promise<BlockModel>>();
   worker.onmessage = (e: MessageEvent<ComputeReply>) => {
@@ -65,8 +70,16 @@ export function workerCompute(worker: Worker): LocalCompute {
   };
   worker.onerror = (e) => {
     const err = new Error(`compute worker failed: ${e.message}`);
+    console.warn('[bmv] compute worker failed; computing on the main thread from now on.', e.message);
+    failed ??= fallback();
     for (const p of pending.values()) p.reject(err);
     pending.clear();
+    models.clear();
+    try {
+      worker.terminate();
+    } catch {
+      // already gone
+    }
   };
   const call = <T>(req: ComputeRequestBody): Promise<T> =>
     new Promise<T>((resolve, reject) => {
@@ -76,6 +89,7 @@ export function workerCompute(worker: Worker): LocalCompute {
     });
   return {
     model(blastId) {
+      if (failed) return failed.model(blastId);
       let m = models.get(blastId);
       if (!m) {
         m = call<BlockModel>({ op: 'model', blastId });
@@ -84,8 +98,9 @@ export function workerCompute(worker: Worker): LocalCompute {
       }
       return m;
     },
-    detail: (blastId) => call<BlastDetail>({ op: 'detail', blastId }),
-    movement: (blastId, params) => call<MovementResult>({ op: 'movement', blastId, params }),
+    detail: (blastId) => (failed ? failed.detail(blastId) : call<BlastDetail>({ op: 'detail', blastId })),
+    movement: (blastId, params) =>
+      failed ? failed.movement(blastId, params) : call<MovementResult>({ op: 'movement', blastId, params }),
   };
 }
 

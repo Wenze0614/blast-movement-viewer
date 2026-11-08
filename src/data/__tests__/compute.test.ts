@@ -88,6 +88,27 @@ describe('workerCompute (client side)', () => {
     await expect(p).rejects.toThrow(/compute worker failed: boom/);
   });
 
+  it('a worker that fails before the first request: later calls fall back to inline compute (Codex review)', async () => {
+    const dead = { onmessage: null, onerror: null as ((e: ErrorEvent) => void) | null, postMessage: vi.fn(), terminate: vi.fn() };
+    const c = workerCompute(dead as unknown as Worker);
+    dead.onerror!({ message: 'script failed to load' } as ErrorEvent);
+    const detail = await c.detail('b1040-017');
+    expect(detail.holes.length).toBeGreaterThan(0);
+    expect((await c.model('b1040-017')).count).toBe(3200);
+    expect(dead.postMessage).not.toHaveBeenCalled();
+    expect(dead.terminate).toHaveBeenCalled();
+  });
+
+  it('a worker that fails mid-request: the pending call rejects, retries succeed inline', async () => {
+    const stuck = { onmessage: null, onerror: null as ((e: ErrorEvent) => void) | null, postMessage: vi.fn(), terminate: vi.fn() };
+    const c = workerCompute(stuck as unknown as Worker);
+    const pending = c.movement('b1040-017', DEFAULT_BLAST_PARAMETERS);
+    stuck.onerror!({ message: 'boom' } as ErrorEvent);
+    await expect(pending).rejects.toThrow(/compute worker failed: boom/);
+    const retry = await c.movement('b1040-017', DEFAULT_BLAST_PARAMETERS);
+    expect(retry.paramsHash).toBe((await inlineCompute().movement('b1040-017', DEFAULT_BLAST_PARAMETERS)).paramsHash);
+  });
+
   it('LocalDataSource over a worker compute: an abort rejects at once, the late result is dropped', async () => {
     const ds = new LocalDataSource(workerCompute(fakeWorker() as unknown as Worker));
     const ctrl = new AbortController();

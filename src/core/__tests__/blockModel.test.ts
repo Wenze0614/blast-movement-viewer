@@ -3,7 +3,7 @@
  * core/blockModel.ts, core/blasts.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { BLAST_CONFIGS, DEFAULT_BLAST_CONFIG_ID, getBlastConfig } from '../blasts';
+import { STANDARD_BLASTS, DEFAULT_BLAST_CONFIG_ID, getBlastConfig } from '../blasts';
 import {
   blockIdAt,
   blockModelConfigHash,
@@ -83,7 +83,7 @@ describe('generateBlockModel (M1)', () => {
     expect(block.size).toEqual([2.5, 2.5, 2.5]);
   });
 
-  it.each(BLAST_CONFIGS.map((c) => c.id))('ore (grade >= cutoff 0.5 g/t) is 15–30%% of total tonnes for %s', (id) => {
+  it.each(STANDARD_BLASTS.map((c) => c.id))('ore (grade >= cutoff 0.5 g/t) is 15–30%% of total tonnes for %s', (id) => {
     const frac = oreTonnesFraction(generateBlockModel(getBlastConfig(id)!));
     expect(frac).toBeGreaterThanOrEqual(0.15);
     expect(frac).toBeLessThanOrEqual(0.3);
@@ -108,7 +108,7 @@ describe('generateBlockModel (M1)', () => {
   });
 
   it('every array has the right length (centroid 3N, scalars N)', () => {
-    for (const cfg of BLAST_CONFIGS) {
+    for (const cfg of STANDARD_BLASTS) {
       const m = generateBlockModel(cfg);
       const n = configBlockCount(cfg);
       expect(m.count).toBe(n);
@@ -117,7 +117,7 @@ describe('generateBlockModel (M1)', () => {
     }
   });
 
-  it.each(BLAST_CONFIGS.map((c) => c.id))(
+  it.each(STANDARD_BLASTS.map((c) => c.id))(
     'sparse %s: blocks fill exactly the columns inside the outline, every flitch, cells strictly increasing',
     (id) => {
       const cfg = getBlastConfig(id)!;
@@ -173,10 +173,10 @@ describe('generateBlockModel (M1)', () => {
 
 describe('demo blasts (ADR-10)', () => {
   it('has the three demo blasts with the planned grids', () => {
-    expect(BLAST_CONFIGS.map((c) => c.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
-    const boxes = BLAST_CONFIGS.map((c) => c.grid.nx * c.grid.ny * c.grid.nz);
+    expect(STANDARD_BLASTS.map((c) => c.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
+    const boxes = STANDARD_BLASTS.map((c) => c.grid.nx * c.grid.ny * c.grid.nz);
     expect(boxes).toEqual([3840, 3840, 30720]);
-    expect(BLAST_CONFIGS.map((c) => configBlockCount(c))).toEqual([3200, 3088, 27088]);
+    expect(STANDARD_BLASTS.map((c) => configBlockCount(c))).toEqual([3200, 3088, 27088]);
     const dense = getBlastConfig('b1040-031')!.grid;
     expect([dense.nx, dense.ny, dense.nz, ...dense.blockSize]).toEqual([80, 48, 8, 1.25, 1.25, 1.25]);
     expect(getBlastConfig('nope')).toBeUndefined();

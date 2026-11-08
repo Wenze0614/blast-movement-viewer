@@ -7,10 +7,11 @@
  * - ore loss % = ore→waste t ÷ total ore t;  dilution % = waste→mill t ÷ mill t;
  *   mill grade = Σ t·g ÷ Σ t;  oz = g ÷ 31.1035;
  *   ore metal recovery % = ore→mill metal ÷ total ore metal (excludes metal carried by dilution).
- * Runs on the client (cheap, O(N·V)) so it can update live when a dig line is edited.
+ * Runs on the client so it can update live when a dig line is edited: each distinct plan position
+ * (a column in situ, a stack after the blast) is tested once, with a banded point-in-polygon test.
  */
 import { GRAMS_PER_TROY_OZ } from './defaults';
-import { pointInPolygon, polygonBounds } from './geometry';
+import { createPolygonTester, polygonBounds } from './geometry';
 import type {
   BlockModel,
   DigPolygon,
@@ -36,18 +37,28 @@ export interface ReconcileInput {
   cutoff: number;
 }
 
-/** 1 = mill, 0 = waste, per block. */
+/**
+ * 1 = mill, 0 = waste, per block: is its plan centroid inside the polygon (even–odd)? Blocks
+ * sharing a plan position (a column in situ, a stack after the blast) share one test, cached by
+ * the exact coordinates, so the answer is identical to testing every block.
+ */
 export function millMask(positions: Float32Array, polygon: DigPolygon): Uint8Array {
   const n = positions.length / 3;
   const mask = new Uint8Array(n);
   const bounds = polygonBounds(polygon.polygons);
   if (!bounds) return mask;
   const [minX, minY, maxX, maxY] = bounds;
+  const inside = createPolygonTester(polygon.polygons);
+  const cache = new Map<number, Map<number, number>>();
   for (let b = 0; b < n; b++) {
     const x = positions[3 * b];
     const y = positions[3 * b + 1];
     if (x < minX || x > maxX || y < minY || y > maxY) continue;
-    if (pointInPolygon(x, y, polygon.polygons)) mask[b] = 1;
+    let row = cache.get(x);
+    if (!row) cache.set(x, (row = new Map()));
+    let v = row.get(y);
+    if (v === undefined) row.set(y, (v = inside(x, y) ? 1 : 0));
+    mask[b] = v;
   }
   return mask;
 }

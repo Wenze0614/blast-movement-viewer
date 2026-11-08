@@ -93,7 +93,7 @@ describe('ApiDataSource through the route handlers', () => {
     expect(s.source).toBe('api');
     expect(s.fallback).toBeNull();
     expect(typeof s.lastLatencyMs).toBe('number');
-    expect(s.blasts.map((b) => b.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031']);
+    expect(s.blasts.map((b) => b.id)).toEqual(['b1040-017', 'b1030-022', 'b1040-031', 'b1050-001']);
     expect(s.model!.configHash).toBe(model.configHash);
     const local = computeMovement(model, cfg.defaultParams);
     expect(s.movement!.paramsHash).toBe(local.paramsHash);

@@ -2,7 +2,7 @@
  * Synthetic pit terrain (core/terrain.ts). Triangle packing: engine/__tests__/terrainGeometry.test.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { BLAST_CONFIGS, getBlastConfig } from '../blasts';
+import { STANDARD_BLASTS, getBlastConfig } from '../blasts';
 import { generateBlockModel } from '../blockModel';
 import { createFootprint, modelColumnMask } from '../footprint';
 import { computeMovement, computeMovementDetailed } from '../movement';
@@ -80,7 +80,7 @@ describe('buildPitTerrain', () => {
     expect(Array.from(again.height)).toEqual(Array.from(terrain.height));
     expect(Array.from(again.mask)).toEqual(Array.from(terrain.mask));
     expect(terrain.spacing).toBe(1.25);
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const t = buildPitTerrain(generateBlockModel(c), 'east');
       const b = c.grid.blockSize[0];
       const ratio = Math.max(t.spacing / b, b / t.spacing);
@@ -134,7 +134,7 @@ describe('buildPitTerrain', () => {
   });
 
   it('every block of the default movement rests on floor, not inside the terrain', () => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m: BlockModel = generateBlockModel(c);
       const t = buildPitTerrain(m, 'east');
       const mv = computeMovement(m, c.defaultParams);
@@ -155,7 +155,7 @@ describe('buildPitTerrain', () => {
   ];
 
   it.each(EXTREMES)('every settled block sits on the floor over its whole swollen footprint (%s)', (_name, over) => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m = generateBlockModel(c);
       const params = { ...c.defaultParams, ...over };
       const t = buildPitTerrain(m, params.freeFace);
@@ -175,7 +175,7 @@ describe('buildPitTerrain', () => {
   });
 
   it.each(EXTREMES)('no block meets the terrain in flight: animated boxes clear it at every progress (%s)', (_name, over) => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m = generateBlockModel(c);
       const params = { ...c.defaultParams, ...over };
       const t = buildPitTerrain(m, params.freeFace);
@@ -206,7 +206,7 @@ describe('buildPitTerrain', () => {
   });
 
   it('the surveyed area (mask) covers the blast and its muckpile; the edge is irregular', () => {
-    for (const c of BLAST_CONFIGS) {
+    for (const c of STANDARD_BLASTS) {
       const m = generateBlockModel(c);
       const t = buildPitTerrain(m, 'east');
       const mv = computeMovement(m, { ...c.defaultParams, maxThrow: 25 });

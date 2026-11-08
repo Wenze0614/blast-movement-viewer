@@ -34,12 +34,17 @@ export const SIDE_OPEN = 30;
 export const TERRAIN_SPACING_TARGET = 1.25;
 
 /**
- * m: the pit terrain's vertex spacing, which is also its floor margin around free ground. The
- * block size divided by a whole number, so terrain cells nest inside block cells.
+ * m: the pit terrain's vertex spacing, which is also its floor margin around free ground. Near
+ * TERRAIN_SPACING_TARGET and commensurate with the block grid: the block size divided by a whole
+ * number (blocks ≥ the target: terrain cells nest inside block cells) or multiplied by one (small
+ * blocks: each terrain cell is a whole number of block cells, so a 0.5 m model gets a 1.5 m
+ * terrain instead of a 0.5 m one).
  */
 export function floorMargin(grid: GridSpec): number {
   const bs = Math.min(grid.blockSize[0], grid.blockSize[1]);
-  return bs / Math.max(1, Math.round(bs / TERRAIN_SPACING_TARGET));
+  return bs >= TERRAIN_SPACING_TARGET
+    ? bs / Math.round(bs / TERRAIN_SPACING_TARGET)
+    : bs * Math.max(1, Math.round(TERRAIN_SPACING_TARGET / bs));
 }
 
 export interface BenchFrame {
@@ -208,20 +213,43 @@ export function createFootprint(grid: GridSpec, columns: Uint8Array, face: FreeF
   const openLatMax = latMax + Math.ceil(SIDE_OPEN / cb - 1e-9) * cb;
   const isOpen = (a: number, b: number) => a >= faceLine(b) && a < openEnd && b >= openLatMin && b < openLatMax;
   const isFree = (a: number, b: number) => contains(a, b) || isOpen(a, b);
+  // All free ground lies in a ∈ [0, openEnd), b ∈ [openLatMin, openLatMax), on block cells.
+  // A summed-area table of the rock cells there answers any rectangle in O(1); everything outside
+  // that window is rock.
+  const nI = Math.round(openEnd / ca);
+  const jMin = Math.round(openLatMin / cb);
+  const nJ = Math.round((openLatMax - openLatMin) / cb);
+  const sat = new Int32Array((nI + 1) * (nJ + 1)); // sat[(i) * (nJ + 1) + j]: rock cells in [0, i) × [0, j)
+  for (let i = 0; i < nI; i++) {
+    let row = 0;
+    for (let j = 0; j < nJ; j++) {
+      row += isFree((i + 0.5) * ca, (j + jMin + 0.5) * cb) ? 0 : 1;
+      sat[(i + 1) * (nJ + 1) + (j + 1)] = sat[i * (nJ + 1) + (j + 1)] + row;
+    }
+  }
   const eps = 1e-7 * Math.max(ca, cb);
   const rectIsFree = (a0: number, a1: number, b0: number, b1: number) => {
     if (a1 < a0) a0 = a1 = (a0 + a1) / 2;
     if (b1 < b0) b0 = b1 = (b0 + b1) / 2;
     const i0 = Math.floor((a0 + eps) / ca);
     const i1 = Math.max(i0, Math.floor((a1 - eps) / ca));
-    const j0 = Math.floor((b0 + eps) / cb);
-    const j1 = Math.max(j0, Math.floor((b1 - eps) / cb));
-    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (!isFree((i + 0.5) * ca, (j + 0.5) * cb)) return false;
-    return true;
+    const j0 = Math.floor((b0 + eps) / cb) - jMin;
+    const j1 = Math.max(j0, Math.floor((b1 - eps) / cb) - jMin);
+    if (i0 < 0 || j0 < 0 || i1 >= nI || j1 >= nJ) return false; // reaches outside: rock
+    const w = nJ + 1;
+    return sat[(i1 + 1) * w + (j1 + 1)] - sat[i0 * w + (j1 + 1)] - sat[(i1 + 1) * w + j0] + sat[i0 * w + j0] === 0;
   };
   const boxIsFree = (a0: number, b0: number, size: number) => rectIsFree(a0, a0 + size, b0, b0 + size);
-  const step = Math.min(ca, cb) / 4;
+  const step = Math.min(ca, cb) / 2;
   const pathIsFree = (as: number, bs: number, ae: number, be: number, ha0: number, hb0: number, k: number, tol: number) => {
+    // Fast path: the bounding box of the whole sweep (start and end poses, both shrunk) is free.
+    {
+      const ha1 = Math.max(0, ha0 * k - tol);
+      const hb1 = Math.max(0, hb0 * k - tol);
+      const ha = Math.max(0, ha0 - tol);
+      const hb = Math.max(0, hb0 - tol);
+      if (rectIsFree(Math.min(as - ha, ae - ha1), Math.max(as + ha, ae + ha1), Math.min(bs - hb, be - hb1), Math.max(bs + hb, be + hb1))) return true;
+    }
     const n = Math.max(1, Math.ceil(Math.max(Math.abs(ae - as), Math.abs(be - bs), (k - 1) * Math.max(ha0, hb0)) / step));
     // Shrunk pose at eased progress s: centre ± max(0, half(s) − tol).
     const pose = (s: number): [number, number, number, number] => {

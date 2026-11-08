@@ -138,11 +138,26 @@ const smoothstep = (e0: number, e1: number, x: number) => {
 /** A vein's grade contribution (g/t, before the global ore noise and nugget) at (x, y, z). */
 export function veinContribution(f: VeinFeature, noise: VeinNoise, x: number, y: number, z: number): number {
   const { d, along, overshoot } = traceDistance(f.trace, x, y);
+  return veinContributionAt(f, noise, d, along, overshoot, z);
+}
+
+/** Beyond this many 1/e widths across the sheet a vein adds less than Float32 can resolve. */
+const VEIN_REACH_WIDTHS = 5;
+
+/**
+ * veinContribution with the plan-only part (traceDistance: d, along, overshoot) supplied, so a
+ * generator can compute it once per column. Far from the sheet (even after the largest meander)
+ * it returns 0 without touching the noise: the exact value there is below exp(−25) of the peak.
+ */
+export function veinContributionAt(f: VeinFeature, noise: VeinNoise, d: number, along: number, overshoot: number, z: number): number {
   const dip = f.dipDeg * DEG;
   const offset = f.dipDeg >= 89.999 ? 0 : (f.zRef - z) / Math.tan(dip);
+  const sinDip = Math.sin(dip);
+  const reach = VEIN_REACH_WIDTHS * Math.max(f.halfThickness, f.halo.halfWidth);
+  if ((Math.abs(d - offset) - Math.abs(f.wander)) * sinDip > reach || overshoot > VEIN_REACH_WIDTHS * VEIN_PINCH_OUT) return 0;
   const L = f.wanderLength;
   const meander = f.wander * noise.wander(along / L, z / L, 0.37);
-  const across = (d - offset + meander) * Math.sin(dip);
+  const across = (d - offset + meander) * sinDip;
   const pinch = Math.exp(-((overshoot / VEIN_PINCH_OUT) ** 2));
   const s = noise.shoot(along / L, z / L, 4.1);
   const shoot = 1 - f.patchiness + f.patchiness * smoothstep(-0.25, 0.35, s);
@@ -201,12 +216,19 @@ export function featureShape(f: LensFeature | PodFeature, x: number, y: number, 
 }
 
 export interface OrebodySampler {
-  /** Grade (g/t) and indicator at a point. Call in a fixed order for determinism (nugget draws). */
-  sample(x: number, y: number, z: number): { grade: number; indicator: number };
+  /**
+   * Grade (g/t) and indicator at a point. Call in a fixed order for determinism (nugget draws).
+   * `column` (0 ≤ column < options.columns) names the point's plan column: points sharing it must
+   * share (x, y), and the plan-only vein geometry is then computed once per column.
+   */
+  sample(x: number, y: number, z: number, column?: number): { grade: number; indicator: number };
 }
 
-/** Build a seeded sampler. Same (spec, seed) and same call order → identical grades. */
-export function createOrebodySampler(spec: OrebodySpec, seed: number): OrebodySampler {
+/**
+ * Build a seeded sampler. Same (spec, seed) and same call order → identical grades.
+ * `options.columns`: how many plan columns `sample` may name (enables the per-column cache).
+ */
+export function createOrebodySampler(spec: OrebodySpec, seed: number, options: { columns?: number } = {}): OrebodySampler {
   const bgNoise = createSeededNoise3D(deriveSeed(seed, 'orebody/background'));
   const oreNoise = createSeededNoise3D(deriveSeed(seed, 'orebody/ore'));
   const nugget: Rng = createRng(deriveSeed(seed, 'orebody/nugget'));
@@ -219,21 +241,47 @@ export function createOrebodySampler(spec: OrebodySpec, seed: number): OrebodySa
         }
       : null,
   );
+  // Per-column cache of each vein's plan geometry (d, along, overshoot); NaN = not computed yet.
+  const columns = options.columns ?? 0;
+  const planCache = spec.features.map((f) => (f.kind === 'vein' && columns > 0 ? new Float64Array(3 * columns).fill(NaN) : null));
+  const plan = (i: number, f: VeinFeature, x: number, y: number, column: number | undefined): [number, number, number] => {
+    const cache = planCache[i];
+    if (cache && column !== undefined && column >= 0 && column < columns) {
+      const o = 3 * column;
+      if (Number.isNaN(cache[o])) {
+        const t = traceDistance(f.trace, x, y);
+        cache[o] = t.d;
+        cache[o + 1] = t.along;
+        cache[o + 2] = t.overshoot;
+      }
+      return [cache[o], cache[o + 1], cache[o + 2]];
+    }
+    const t = traceDistance(f.trace, x, y);
+    return [t.d, t.along, t.overshoot];
+  };
   return {
-    sample(x, y, z) {
+    sample(x, y, z, column) {
       // Strongest contribution wins (features do not add up where they overlap).
       let best = 0;
       let peak = 0;
-      spec.features.forEach((f, i) => {
-        const c = f.kind === 'vein' ? veinContribution(f, veinNoise[i]!, x, y, z) : f.peakGrade * featureShape(f, x, y, z);
+      for (let i = 0; i < spec.features.length; i++) {
+        const f = spec.features[i];
+        let c: number;
+        if (f.kind === 'vein') {
+          const [d, along, overshoot] = plan(i, f, x, y, column);
+          c = veinContributionAt(f, veinNoise[i]!, d, along, overshoot, z);
+        } else {
+          c = f.peakGrade * featureShape(f, x, y, z);
+        }
         if (c > best) {
           best = c;
           peak = f.peakGrade;
         }
-      });
+      }
       const ind = peak > 0 ? best / peak : 0;
       const nb = fbm3(bgNoise, x / len, y / len, z / len, 2);
-      const no = fbm3(oreNoise, x / len, y / len, z / len, 3);
+      // No ore feature here: the ore noise cannot change anything (indicator = 0), so skip it.
+      const no = ind > 0 ? fbm3(oreNoise, x / len, y / len, z / len, 3) : 0;
       const indicator = ind * Math.exp(spec.noise.amplitude * no);
       const g =
         spec.background.median * Math.exp(spec.background.logSigma * nb) +

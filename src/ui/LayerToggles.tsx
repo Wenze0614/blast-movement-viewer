@@ -24,11 +24,11 @@ function TimingSwatch() {
   return <span aria-hidden className="inline-block h-2 w-6 rounded-sm" style={{ background: PLASMA_CSS }} />;
 }
 
-/** Three small dots in the grade palette: holes are coloured by sampled grade. */
+/** Small dots in the grade palette: holes are coloured by sampled grade. */
 function HoleSwatch() {
-  const classes = [OreClass.Waste, OreClass.LowGrade, OreClass.HighGrade];
+  const classes = [OreClass.Waste, OreClass.LowGrade, OreClass.MediumGrade, OreClass.HighGrade];
   return (
-    <span aria-hidden className="inline-flex w-6 items-center justify-center gap-0.5">
+    <span aria-hidden className="inline-flex w-7 items-center justify-center gap-0.5">
       {classes.map((c) => (
         <span key={c} className="inline-block h-2 w-1.5 rounded-sm" style={{ background: GRADE_PALETTE[c].hex }} />
       ))}

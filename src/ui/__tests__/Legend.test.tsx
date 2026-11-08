@@ -23,11 +23,12 @@ const tonnes = () => Array.from(document.querySelectorAll('[data-tonnes]')).map(
 afterEach(cleanup);
 
 describe('LegendView', () => {
-  it('grade: three classes with tonnes', () => {
-    render(<LegendView mode="grade" tonnes={[1000, 250.4, 49.6]} />);
+  it('grade: four classes with tonnes', () => {
+    render(<LegendView mode="grade" tonnes={[1000, 250.4, 120, 49.6]} />);
     expect(screen.getByRole('heading').textContent).toBe('Grade (Au)');
-    expect(labels()).toEqual(['waste', 'low', 'high']);
-    expect(tonnes()).toEqual(['1,000 t', '250 t', '50 t']);
+    expect(labels()).toEqual(['waste', 'low', 'medium', 'high']);
+    expect(tonnes()).toEqual(['1,000 t', '250 t', '120 t', '50 t']);
+    expect(document.body.textContent).toContain('Medium grade (1.5–3 g/t)');
   });
 
   it('outcome: four classes with tonnes and a caption naming positions + line', () => {
@@ -50,7 +51,7 @@ describe('LegendView', () => {
   it('a mode waiting for data says it is showing grade', () => {
     render(<LegendView mode="grade" tonnes={null} fallbackFrom="outcome" />);
     expect(screen.getByRole('heading').textContent).toBe('Outcome');
-    expect(labels()).toEqual(['waste', 'low', 'high']);
+    expect(labels()).toEqual(['waste', 'low', 'medium', 'high']);
     expect(document.body.textContent).toContain('showing grade');
   });
 });
@@ -63,7 +64,7 @@ describe('legendProps (mirrors the colours the engine paints)', () => {
     outcomeLine: 'original' as const,
     started: false,
   };
-  const gradeT = classTonnes(model.oreClass, model.tonnes, 3);
+  const gradeT = classTonnes(model.oreClass, model.tonnes, 4);
   const total = sumTonnes(model.tonnes);
 
   it('outcome follows progress and the line; tonnes come from the matching reconciliation column', () => {

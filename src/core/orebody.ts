@@ -2,13 +2,16 @@
  * Synthetic gold ore bodies (docs/02-plan.md M1). Pure functions of position + seeded noise.
  *
  * Grade model (g/t Au) at a point p:
- *   I(p)   = max over features of a smooth shape in [0, 1] (dipping lens or ellipsoidal pod)
+ *   c_f(p) = feature f's grade contribution: peak · shape (dipping lens, ellipsoidal pod) or, for a
+ *            vein, peak · core + halo grade · halo (see VeinFeature)
+ *   winner = the feature with the largest c_f; I(p) = c_winner / peak_winner (its shape, 0..1+)
  *   grade  = background · e^(bgLogSigma · n_bg) + peak · I(p) · e^(amplitude · n_ore + nugget · N(0,1))
  * where n_bg and n_ore are seeded, spatially correlated simplex noise fields, so the ore boundary
  * is irregular and neighbouring blocks have similar grades. Synthetic; not a geostatistical model.
  */
 import { createRng, createSeededNoise3D, deriveSeed, fbm3, type Rng } from './rng';
-import type { Vec3 } from './types';
+import type { NoiseFunction3D } from 'simplex-noise';
+import type { Vec2, Vec3 } from './types';
 
 const DEG = Math.PI / 180;
 
@@ -44,7 +47,109 @@ export interface PodFeature {
   peakGrade: number;
 }
 
-export type OrebodyFeature = LensFeature | PodFeature;
+/**
+ * A gold-bearing vein: a thin, dipping, meandering sheet along a plan trace, the typical host of
+ * orogenic gold. Grade across it is a narrow high-grade core inside a wider low-grade halo
+ * (disseminated alteration). Along strike the core is patchy (ore shoots and barren gaps), and
+ * both pinch out past the trace's ends. Several veins sharing an end point read as a branch.
+ *
+ * Geometry at a point: d = signed plan distance from the trace (positive on the dip side, i.e.
+ * to the right walking along the trace), minus the down-dip offset (zRef − z) / tan(dip), plus a
+ * seeded meander; the distance across the sheet is that times sin(dip).
+ */
+export interface VeinFeature {
+  kind: 'vein';
+  /** Plan trace (world x, y, m) of the vein's mid-surface at elevation zRef; two or more points. */
+  trace: Vec2[];
+  /** m, elevation at which the mid-surface follows the trace exactly. */
+  zRef: number;
+  /** degrees from horizontal (90 = vertical); dips to the right of the trace direction. */
+  dipDeg: number;
+  /** m, 1/e half-thickness of the high-grade core across the sheet. */
+  halfThickness: number;
+  /** g/t at the core. */
+  peakGrade: number;
+  /** Disseminated envelope: 1/e half-width across the sheet (m) and its grade at the vein (g/t). */
+  halo: { halfWidth: number; grade: number };
+  /** m, how far the sheet meanders sideways (seeded noise along strike and down dip). */
+  wander: number;
+  /** m, correlation length of the meander and of the ore shoots. */
+  wanderLength: number;
+  /** 0..1, how patchy the core is along strike (0 = continuous; 1 = distinct shoots and gaps). */
+  patchiness: number;
+}
+
+export type OrebodyFeature = LensFeature | PodFeature | VeinFeature;
+
+/** m: the core and halo fade out over about this distance past a trace end (pinch-out). */
+export const VEIN_PINCH_OUT = 10;
+
+/**
+ * Signed plan distance to a polyline (positive to the right of its direction), the arc length
+ * along it, and how far past its first or last point the nearest point lies (`overshoot`). Past an
+ * end, `d` is measured across the extended end segment, so the vein pinches out along strike
+ * instead of being cut off by the distance to the end point.
+ */
+export function traceDistance(trace: readonly Vec2[], x: number, y: number): { d: number; along: number; overshoot: number } {
+  let best = Infinity;
+  let bestD = 0;
+  let bestAlong = 0;
+  let bestOver = 0;
+  let acc = 0;
+  for (let k = 0; k + 1 < trace.length; k++) {
+    const [ax, ay] = trace[k];
+    const [bx, by] = trace[k + 1];
+    const ex = bx - ax;
+    const ey = by - ay;
+    const len = Math.hypot(ex, ey);
+    if (len === 0) continue;
+    const raw = ((x - ax) * ex + (y - ay) * ey) / (len * len);
+    const t = Math.min(1, Math.max(0, raw));
+    const px = ax + ex * t;
+    const py = ay + ey * t;
+    const dist = Math.hypot(x - px, y - py);
+    if (dist < best) {
+      best = dist;
+      // right of the direction (ex, ey) is (ey, −ex); cross / len = signed distance to the line
+      const cross = ((x - ax) * ey - (y - ay) * ex) / len;
+      const first = k === 0;
+      const last = k + 2 === trace.length;
+      bestOver = first && raw < 0 ? -raw * len : last && raw > 1 ? (raw - 1) * len : 0;
+      // Past an end, measure across the extended end segment (the pinch-out handles the overshoot).
+      bestD = bestOver > 0 ? cross : (cross >= 0 ? 1 : -1) * dist;
+      bestAlong = acc + t * len;
+    }
+    acc += len;
+  }
+  return { d: bestD, along: bestAlong, overshoot: bestOver };
+}
+
+/** Seeded noise a vein needs (meander, ore shoots). */
+export interface VeinNoise {
+  wander: NoiseFunction3D;
+  shoot: NoiseFunction3D;
+}
+
+const smoothstep = (e0: number, e1: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+
+/** A vein's grade contribution (g/t, before the global ore noise and nugget) at (x, y, z). */
+export function veinContribution(f: VeinFeature, noise: VeinNoise, x: number, y: number, z: number): number {
+  const { d, along, overshoot } = traceDistance(f.trace, x, y);
+  const dip = f.dipDeg * DEG;
+  const offset = f.dipDeg >= 89.999 ? 0 : (f.zRef - z) / Math.tan(dip);
+  const L = f.wanderLength;
+  const meander = f.wander * noise.wander(along / L, z / L, 0.37);
+  const across = (d - offset + meander) * Math.sin(dip);
+  const pinch = Math.exp(-((overshoot / VEIN_PINCH_OUT) ** 2));
+  const s = noise.shoot(along / L, z / L, 4.1);
+  const shoot = 1 - f.patchiness + f.patchiness * smoothstep(-0.25, 0.35, s);
+  const qc = across / f.halfThickness;
+  const qh = across / f.halo.halfWidth;
+  return pinch * (f.peakGrade * shoot * Math.exp(-qc * qc) + f.halo.grade * Math.exp(-qh * qh));
+}
 
 export interface OrebodySpec {
   features: OrebodyFeature[];
@@ -63,8 +168,8 @@ export interface OrebodySpec {
   maxGrade: number;
 }
 
-/** Shape value in [0, 1] of one feature at (x, y, z). */
-export function featureShape(f: OrebodyFeature, x: number, y: number, z: number): number {
+/** Shape value in [0, 1] of a lens or pod at (x, y, z). */
+export function featureShape(f: LensFeature | PodFeature, x: number, y: number, z: number): number {
   const dx = x - f.centre[0];
   const dy = y - f.centre[1];
   const dz = z - f.centre[2];
@@ -106,18 +211,27 @@ export function createOrebodySampler(spec: OrebodySpec, seed: number): OrebodySa
   const oreNoise = createSeededNoise3D(deriveSeed(seed, 'orebody/ore'));
   const nugget: Rng = createRng(deriveSeed(seed, 'orebody/nugget'));
   const len = spec.noise.length;
+  const veinNoise: (VeinNoise | null)[] = spec.features.map((f, i) =>
+    f.kind === 'vein'
+      ? {
+          wander: createSeededNoise3D(deriveSeed(seed, `orebody/vein/${i}/wander`)),
+          shoot: createSeededNoise3D(deriveSeed(seed, `orebody/vein/${i}/shoot`)),
+        }
+      : null,
+  );
   return {
     sample(x, y, z) {
-      // Strongest feature wins (pods do not add up where they overlap).
-      let ind = 0;
+      // Strongest contribution wins (features do not add up where they overlap).
+      let best = 0;
       let peak = 0;
-      for (const f of spec.features) {
-        const s = featureShape(f, x, y, z);
-        if (s > ind) {
-          ind = s;
+      spec.features.forEach((f, i) => {
+        const c = f.kind === 'vein' ? veinContribution(f, veinNoise[i]!, x, y, z) : f.peakGrade * featureShape(f, x, y, z);
+        if (c > best) {
+          best = c;
           peak = f.peakGrade;
         }
-      }
+      });
+      const ind = peak > 0 ? best / peak : 0;
       const nb = fbm3(bgNoise, x / len, y / len, z / len, 2);
       const no = fbm3(oreNoise, x / len, y / len, z / len, 3);
       const indicator = ind * Math.exp(spec.noise.amplitude * no);

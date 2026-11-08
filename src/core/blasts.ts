@@ -3,9 +3,12 @@
  *
  * | id        | bounding grid             | outline                    | ore body                         |
  * |-----------|---------------------------|----------------------------|----------------------------------|
- * | b1040-017 | 40×24×4 @ 2.5 m           | irregular, ragged face     | single dipping lens across throw |
- * | b1030-022 | 40×24×4 @ 2.5 m           | L-shape (narrow back)      | two pods with a waste parting    |
- * | b1040-031 | 80×48×8 @ 1.25 m          | notched, chamfered corner  | lens + high-grade shoot (dense)  |
+ * | b1040-017 | 40×24×4 @ 2.5 m           | irregular, ragged face     | branching vein across the throw  |
+ * | b1030-022 | 40×24×4 @ 2.5 m           | L-shape (narrow back)      | two veins, waste parting between |
+ * | b1040-031 | 80×48×8 @ 1.25 m          | notched, chamfered corner  | vein network + high-grade shoot  |
+ *
+ * Veins (orebody.ts VeinFeature): a high-grade core inside a low-grade halo, patchy along strike,
+ * meandering, pinching out past their traces; a splay starting on another vein reads as a branch.
  *
  * Default firing: V from the front centre (017, 031), echelon from the right front corner (022).
  * Each grid is a 100 × 60 × 10 m bounding box; the outline (plan polygon, world x/y) picks the
@@ -33,6 +36,9 @@ export interface BlastConfig extends BlockModelConfig {
 /** Pattern on a 100 × 60 m bench: 25 rows × 13 holes = 325 positions (inside the outline drilled). */
 const PATTERN_100x60: BlastPattern = { ...DEFAULT_PATTERN };
 
+/** Vein defaults the demo veins override (see VeinFeature). */
+const VEIN = { kind: 'vein' } as const;
+
 const BASE_OREBODY: Omit<OrebodySpec, 'features'> = {
   background: { median: 0.12, logSigma: 0.5 },
   noise: { length: 9, amplitude: 0.45 },
@@ -47,7 +53,7 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
   {
     id: 'b1040-017',
     name: 'Bench 1040 · Blast 017',
-    description: 'Single dipping lens crossing the throw direction',
+    description: 'Branching gold vein crossing the throw direction',
     freeFace: 'east',
     grid: { origin: [0, 0, 1030], blockSize: [2.5, 2.5, 2.5], nx: 40, ny: 24, nz: 4 },
     grades: { ...DEFAULT_GRADE_SETTINGS },
@@ -56,16 +62,8 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
     orebody: {
       ...BASE_OREBODY,
       features: [
-        {
-          kind: 'lens',
-          centre: [64, 31, 1035],
-          strikeDeg: 12,
-          dipDeg: 58,
-          halfThickness: 6.5,
-          halfStrike: 26,
-          halfDip: 30,
-          peakGrade: 3.2,
-        },
+        { ...VEIN, trace: [[52, -5], [60, 20], [63, 40], [70, 65]], zRef: 1035, dipDeg: 65, halfThickness: 2.5, peakGrade: 4.5, halo: { halfWidth: 7, grade: 0.75 }, wander: 3, wanderLength: 18, patchiness: 0.6 },
+        { ...VEIN, trace: [[61, 30], [48, 48], [40, 62]], zRef: 1035, dipDeg: 70, halfThickness: 1.8, peakGrade: 3.5, halo: { halfWidth: 5, grade: 0.6 }, wander: 2, wanderLength: 15, patchiness: 0.5 },
       ],
     },
     pattern: PATTERN_100x60,
@@ -74,7 +72,7 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
   {
     id: 'b1030-022',
     name: 'Bench 1030 · Blast 022',
-    description: 'Two ore pods separated by a waste parting',
+    description: 'Two veins separated by a waste parting',
     freeFace: 'east',
     grid: { origin: [0, 0, 1020], blockSize: [2.5, 2.5, 2.5], nx: 40, ny: 24, nz: 4 },
     grades: { ...DEFAULT_GRADE_SETTINGS },
@@ -83,8 +81,8 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
     orebody: {
       ...BASE_OREBODY,
       features: [
-        { kind: 'pod', centre: [40, 22, 1025], radii: [8, 11, 9], rotationDeg: 15, peakGrade: 3.0 },
-        { kind: 'pod', centre: [72, 37, 1025], radii: [9, 10, 9], rotationDeg: -10, peakGrade: 3.6 },
+        { ...VEIN, trace: [[30, -5], [40, 20], [44, 38]], zRef: 1025, dipDeg: 72, halfThickness: 2.6, peakGrade: 4.2, halo: { halfWidth: 6, grade: 0.75 }, wander: 2.5, wanderLength: 16, patchiness: 0.5 },
+        { ...VEIN, trace: [[70, -5], [74, 30], [78, 65]], zRef: 1025, dipDeg: 68, halfThickness: 2.8, peakGrade: 4.8, halo: { halfWidth: 6.5, grade: 0.8 }, wander: 3, wanderLength: 18, patchiness: 0.6 },
       ],
     },
     pattern: PATTERN_100x60,
@@ -93,7 +91,7 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
   {
     id: 'b1040-031',
     name: 'Bench 1040 · Blast 031 (dense)',
-    description: 'Dense 1.25 m model of a lens with a high-grade shoot (performance demo)',
+    description: 'Dense 1.25 m model of a vein network with a high-grade shoot (performance demo)',
     freeFace: 'east',
     grid: { origin: [0, 0, 1030], blockSize: [1.25, 1.25, 1.25], nx: 80, ny: 48, nz: 8 },
     grades: { ...DEFAULT_GRADE_SETTINGS },
@@ -102,17 +100,10 @@ export const BLAST_CONFIGS: readonly BlastConfig[] = [
     orebody: {
       ...BASE_OREBODY,
       features: [
-        {
-          kind: 'lens',
-          centre: [58, 28, 1035],
-          strikeDeg: -8,
-          dipDeg: 62,
-          halfThickness: 6.5,
-          halfStrike: 25,
-          halfDip: 30,
-          peakGrade: 2.8,
-        },
-        { kind: 'pod', centre: [66, 36, 1036], radii: [4, 6, 6], rotationDeg: 0, peakGrade: 5.5 },
+        { ...VEIN, trace: [[50, -5], [57, 25], [60, 45], [66, 65]], zRef: 1035, dipDeg: 62, halfThickness: 2.2, peakGrade: 4, halo: { halfWidth: 6, grade: 0.7 }, wander: 3, wanderLength: 16, patchiness: 0.7 },
+        { ...VEIN, trace: [[57, 22], [78, 30], [95, 34]], zRef: 1035, dipDeg: 75, halfThickness: 1.5, peakGrade: 3.2, halo: { halfWidth: 4, grade: 0.6 }, wander: 2, wanderLength: 12, patchiness: 0.5 },
+        { ...VEIN, trace: [[60, 45], [40, 52], [25, 60]], zRef: 1035, dipDeg: 70, halfThickness: 1.6, peakGrade: 3.2, halo: { halfWidth: 4.5, grade: 0.6 }, wander: 2, wanderLength: 12, patchiness: 0.5 },
+        { kind: 'pod', centre: [66, 36, 1036], radii: [4, 6, 6], rotationDeg: 0, peakGrade: 6.5 },
       ],
     },
     pattern: PATTERN_100x60,

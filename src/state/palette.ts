@@ -3,6 +3,7 @@
  * (legend). Lives in src/state because both sides may import it. Neutral; no brand colours,
  * no red/green pairing.
  */
+import { DEFAULT_GRADE_SETTINGS } from '@/core/defaults';
 import { OreClass } from '@/core/types';
 import { Outcome } from './views';
 
@@ -13,11 +14,16 @@ export interface PaletteEntry {
   hex: string;
 }
 
-/** Grade classes: waste < 0.5, low 0.5–1.5, high ≥ 1.5 g/t Au (M1). Indexed by OreClass. */
+/**
+ * Grade classes (M1), indexed by OreClass: waste grey, then a warm sequential ramp (pale amber →
+ * orange → crimson) so a higher class always reads as hotter. Labels use the default breaks.
+ */
+const G = DEFAULT_GRADE_SETTINGS;
 export const GRADE_PALETTE: Record<OreClass, PaletteEntry> = {
-  [OreClass.Waste]: { key: 'waste', label: 'Waste (< 0.5 g/t)', hex: '#8b9099' },
-  [OreClass.LowGrade]: { key: 'low', label: 'Low grade (0.5–1.5 g/t)', hex: '#e3a72f' },
-  [OreClass.HighGrade]: { key: 'high', label: 'High grade (≥ 1.5 g/t)', hex: '#b3134a' },
+  [OreClass.Waste]: { key: 'waste', label: `Waste (< ${G.cutoff} g/t)`, hex: '#8b9099' },
+  [OreClass.LowGrade]: { key: 'low', label: `Low grade (${G.cutoff}–${G.mediumGrade} g/t)`, hex: '#f0c75e' },
+  [OreClass.MediumGrade]: { key: 'medium', label: `Medium grade (${G.mediumGrade}–${G.highGrade} g/t)`, hex: '#e07a2b' },
+  [OreClass.HighGrade]: { key: 'high', label: `High grade (≥ ${G.highGrade} g/t)`, hex: '#b3134a' },
 };
 
 /**

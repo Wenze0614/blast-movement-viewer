@@ -11,6 +11,7 @@
 import { subscribeWithSelector } from 'zustand/middleware';
 import { createStore, type Mutate, type StoreApi } from 'zustand/vanilla';
 import { DEFAULT_BLAST_PARAMETERS } from '@/core/defaults';
+import { completeGrades } from '@/core/blockModel';
 import { completeParams } from '@/core/params';
 import type {
   BlastParameters,
@@ -257,7 +258,7 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       },
       setBlast: (detail) => {
         // Defensive: a detail from any source with missing params gets the defaults for them.
-        const blast = { ...detail, defaultParams: completeParams(detail.defaultParams) };
+        const blast = { ...detail, grades: completeGrades(detail.grades), defaultParams: completeParams(detail.defaultParams) };
         set({ blast, ...paramsUpdate(get(), blast.defaultParams) });
       },
       setParams: (patch) => set(paramsUpdate(get(), { ...get().params, ...patch })),

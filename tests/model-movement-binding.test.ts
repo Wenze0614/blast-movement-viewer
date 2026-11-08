@@ -339,6 +339,21 @@ describe('blast detail ↔ model source (P9 hole layer)', () => {
     pipeline.dispose();
   });
 
+  it('grade-break mismatch: an API detail with other class breaks is replaced by the model\'s own', async () => {
+    const api = detailOnlyApi({ ...cfgA, grades: { ...cfgA.grades, highGrade: 2.5 } });
+    expect(detailMatchesModel(api.detailB, modelA)).toBe(false);
+    const store = createAppStore();
+    const watch = watchPairs(store);
+    const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
+    await pipeline.settled;
+    const s = store.getState();
+    expect(s.status).toBe('ready');
+    expect(s.blast!.grades).toEqual(modelA.grades);
+    expect(watch.violations).toEqual([]);
+    watch.unsub();
+    pipeline.dispose();
+  });
+
   it('a detail that already matches the local model is not replaced (no needless hole-layer rebuild)', async () => {
     const store = createAppStore();
     const blasts: unknown[] = [];

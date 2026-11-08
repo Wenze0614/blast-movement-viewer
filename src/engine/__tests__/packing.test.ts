@@ -79,8 +79,8 @@ describe('colours', () => {
     expect(() => packClassColours(model.oreClass, GRADE_PALETTE, new Float32Array(3))).toThrow();
   });
 
-  it('palette matches ADR-8', () => {
-    expect([GRADE_PALETTE[0].hex, GRADE_PALETTE[1].hex, GRADE_PALETTE[2].hex]).toEqual(['#8b9099', '#e3a72f', '#b3134a']);
+  it('palette: waste grey, then a warm sequential ramp for low → medium → high', () => {
+    expect([0, 1, 2, 3].map((c) => GRADE_PALETTE[c as 0 | 1 | 2 | 3].hex)).toEqual(['#8b9099', '#f0c75e', '#e07a2b', '#b3134a']);
   });
 });
 

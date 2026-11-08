@@ -89,19 +89,22 @@ describe('generateBlockModel (M1)', () => {
     expect(frac).toBeLessThanOrEqual(0.3);
   });
 
-  it('oreClass follows grade: waste < 0.5, low 0.5–1.5, high >= 1.5 g/t', () => {
+  it('oreClass follows grade: waste < 0.5, low 0.5–1.5, medium 1.5–3, high >= 3 g/t', () => {
     const g = DEFAULT_GRADE_SETTINGS;
+    expect([g.cutoff, g.mediumGrade, g.highGrade]).toEqual([0.5, 1.5, 3]);
     expect(classifyGrade(0.49, g)).toBe(OreClass.Waste);
     expect(classifyGrade(0.5, g)).toBe(OreClass.LowGrade);
     expect(classifyGrade(1.49, g)).toBe(OreClass.LowGrade);
-    expect(classifyGrade(1.5, g)).toBe(OreClass.HighGrade);
+    expect(classifyGrade(1.5, g)).toBe(OreClass.MediumGrade);
+    expect(classifyGrade(2.99, g)).toBe(OreClass.MediumGrade);
+    expect(classifyGrade(3, g)).toBe(OreClass.HighGrade);
     const m = generateBlockModel(cfg017);
     const seen = new Set<number>();
     for (let n = 0; n < m.count; n++) {
       expect(m.oreClass[n]).toBe(classifyGrade(m.grade[n], m.grades));
       seen.add(m.oreClass[n]);
     }
-    expect(seen).toEqual(new Set([OreClass.Waste, OreClass.LowGrade, OreClass.HighGrade]));
+    expect(seen).toEqual(new Set([OreClass.Waste, OreClass.LowGrade, OreClass.MediumGrade, OreClass.HighGrade]));
   });
 
   it('every array has the right length (centroid 3N, scalars N)', () => {

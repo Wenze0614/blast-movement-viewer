@@ -36,7 +36,8 @@ export const DEFAULT_GRADE_SETTINGS: Readonly<GradeSettings> = Object.freeze({
   element: 'Au',
   unit: 'g/t',
   cutoff: 0.5,
-  highGrade: 1.5,
+  mediumGrade: 1.5,
+  highGrade: 3,
 });
 
 /** grams per troy ounce */

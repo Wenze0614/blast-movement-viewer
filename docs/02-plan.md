@@ -30,7 +30,7 @@
 **MVP = Checkpoint 1: live on Vercel by ~16:00 Sunday** (client-only is fine; the API arrives later the same day behind the same interface)
 | ID | Feature | Acceptance criteria |
 |---|---|---|
-| M1 | Synthetic block model | Deterministic from a seed: same seed gives identical arrays. Default bounding grid 40×24×4 blocks of 2.5 m (3,840 cells, 100×60×10 m bench); the blast outline keeps 3,200 blocks. A dipping ore lens plus noise gives about 15–30% ore by tonnes. Grade classes: waste < 0.5, low 0.5–1.5, high ≥ 1.5 g/t Au. Unit test: Σ tonnes = Σ volume × density. |
+| M1 | Synthetic block model | Deterministic from a seed: same seed gives identical arrays. Default bounding grid 40×24×4 blocks of 2.5 m (3,840 cells, 100×60×10 m bench); the blast outline keeps 3,200 blocks. Gold veins (a high-grade core in a low-grade halo, patchy along strike, meandering, branching; `orebody.ts` VeinFeature) plus noise give about 15–30% ore by tonnes. Grade classes: waste < 0.5, low 0.5–1.5, medium 1.5–3, high ≥ 3 g/t Au. Unit test: Σ tonnes = Σ volume × density. |
 | M2 | Instanced 3D render | **One draw call** for all blocks (check `renderer.info.render.calls`). Grade colours with a legend. Orbit camera. ≥ 55 fps on a typical laptop in Chrome at 3,840 blocks. |
 | M3 | Movement model | Pure function `computeMovement(model, params)`. Unit tests: (a) **no two blocks share a post-blast slot**, (b) **no floating blocks**, (c) tonnes and metal conserved exactly, (d) deterministic per seed, (e) mean horizontal displacement is larger in the top flitch than the bottom one, and larger at the front row than the back row. Runs in < 50 ms for 3,840 blocks. |
 | M4 | Blast animation and scrubber | A "Blast" button animates 0→1 over about 2.5 s; blocks start in firing order (front rows first; see ADR-3 step 0). A slider scrubs in either direction. Per-frame CPU work = **one uniform update**. No popping at t = 0 or 1. |
@@ -209,7 +209,7 @@ Coordinates are mine-grid metres: x = East, y = North, z = elevation. Bench loca
 ```
 - Desktop-first with a 360 px panel; stacks below 900 px.
 - A small **data-source badge** ("● API · 38 ms" / "● local") quietly shows the full-stack plumbing.
-- Grade palette: waste `#8b9099`, low `#e3a72f`, high `#b3134a`.
+- Grade palette (four classes): waste `#8b9099`, then a warm sequential ramp: low `#f0c75e`, medium `#e07a2b`, high `#b3134a`.
 - Outcome palette: ore→mill `#14b8a6`, ore lost `#d946ef`, dilution `#f97316`, waste→waste dim grey.
 - No red/green pairing. Your own fonts and accent.
 
@@ -240,9 +240,9 @@ export interface DataSource {
 
   | id | Name | Bounding grid (cells) → blocks inside the outline | Purpose |
   |---|---|---|---|
-  | `b1040-017` | Bench 1040 · Blast 017 | 40×24×4 @ 2.5 m (3,840) → 3,200, ragged face, single dipping lens | Default story |
-  | `b1030-022` | Bench 1030 · Blast 022 | 40×24×4 @ 2.5 m (3,840) → 3,088, L-shape, two pods with a waste parting | Shows it generalises |
-  | `b1040-031` | Bench 1040 · Blast 031 (dense) | 80×48×8 @ 1.25 m (30,720) → 27,088, notched | Performance |
+  | `b1040-017` | Bench 1040 · Blast 017 | 40×24×4 @ 2.5 m (3,840) → 3,200, ragged face, branching vein across the throw | Default story |
+  | `b1030-022` | Bench 1030 · Blast 022 | 40×24×4 @ 2.5 m (3,840) → 3,088, L-shape, two veins with a waste parting | Shows it generalises |
+  | `b1040-031` | Bench 1040 · Blast 031 (dense) | 80×48×8 @ 1.25 m (30,720) → 27,088, notched, vein network + high-grade shoot | Performance |
 
 - **Sketch:**
   ```ts
@@ -318,7 +318,7 @@ export interface DataSource {
 export type Vec3 = [number, number, number];
 export type Vec2 = [number, number];
 
-export enum OreClass { Waste = 0, LowGrade = 1, HighGrade = 2 }
+export enum OreClass { Waste = 0, LowGrade = 1, MediumGrade = 2, HighGrade = 3 }
 export enum RockType { Host = 0, Mineralised = 1 }            // synthetic; display only
 
 export interface GridSpec {
@@ -330,7 +330,8 @@ export interface GridSpec {
 export interface GradeSettings {
   element: 'Au'; unit: 'g/t';
   cutoff: number;        // 0.5  (ore if grade >= cutoff)
-  highGrade: number;     // 1.5  (display class split)
+  mediumGrade: number;   // 1.5  (display split low → medium)
+  highGrade: number;     // 3.0  (display split medium → high)
 }
 
 /**
@@ -464,7 +465,7 @@ export interface ReconciliationResult {
 export interface BlastSummary {
   id: string;                 // 'b1040-017'
   name: string;               // 'Bench 1040 · Blast 017'
-  description: string;        // 'Single dipping lens crossing the throw direction'
+  description: string;        // 'Branching gold vein crossing the throw direction'
   blockCount: number;         // 3840
   benchRL: number;            // 1030 (toe elevation, m)
   freeFace: BlastParameters['freeFace']; // 'east'

@@ -26,6 +26,10 @@ Media to capture in a browser (not yet recorded); add the image links once the f
   an L-shape, a notched bench): 3,200 and 3,088 blocks of 2.5 m, and a dense 27,088-block blast of
   1.25 m blocks. Press **Blast** or scrub the timeline: every block follows its own movement vector
   out from the free face, the rock swells and slumps.
+- **Gold veins.** The ore is a set of meandering, dipping veins: a narrow high-grade core inside a
+  wider low-grade halo, patchy along strike (ore shoots and barren gaps), pinching out at their
+  ends and branching (a splay, a two-vein system with a waste parting, a network with a
+  high-grade shoot). Four grade classes: waste < 0.5, low 0.5–1.5, medium 1.5–3, high ≥ 3 g/t.
 - **Pit context.** A synthetic, seeded terrain around the blast: the floor it sits on, the open
   floor in front of its free face (stepping down to the bench below), unblasted bench rock around
   its outline and two upper benches behind, with an irregular surveyed edge. Display only.

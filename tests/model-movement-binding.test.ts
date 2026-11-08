@@ -51,12 +51,18 @@ function fakeApi(cfgB: BlastConfig, opts: { movementFor?: () => BlockModel } = {
   return api satisfies DataSource & Record<string, unknown>;
 }
 
-/** Records every store state in which a movement is paired with a model it doesn't belong to. */
+/**
+ * Records every store notification in which a movement is paired with a model it doesn't belong
+ * to, or the blast detail (hole layer) was not built for the stored model.
+ */
 function watchPairs(store: AppStore) {
   const violations: string[] = [];
   const unsub = store.subscribe((s) => {
     if (s.model && s.movement && !isMovementFor(s.movement, s.model, s.params)) {
       violations.push(`movement ${s.movement.paramsHash} on model ${s.model.configHash}`);
+    }
+    if (s.model && s.blast && !detailMatchesModel(s.blast, s.model)) {
+      violations.push(`detail ${s.blast.id} not built for model ${s.model.configHash}`);
     }
   });
   return { violations, unsub };
@@ -292,6 +298,7 @@ describe('blast detail ↔ model source (P9 hole layer)', () => {
     expect(api.detailB.holes.map((h) => h.sampledGrade)).not.toEqual(localDetail.holes.map((h) => h.sampledGrade));
 
     const store = createAppStore();
+    const watch = watchPairs(store);
     const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
     await pipeline.settled;
     let s = store.getState();
@@ -305,6 +312,8 @@ describe('blast detail ↔ model source (P9 hole layer)', () => {
     expect(s.blast).toEqual(localDetail);
     expect(s.params.maxThrow).toBe(12);
     expect(s.status).toBe('ready');
+    expect(watch.violations).toEqual([]); // no notification saw the API detail with the local model
+    watch.unsub();
     pipeline.dispose();
   });
 
@@ -362,6 +371,7 @@ describe('blast detail ↔ model source (P9 hole layer)', () => {
     const cfgB = { ...cfgA, seed: cfgA.seed + 1 };
     const api = modelOnlyApi(cfgB, Infinity);
     const store = createAppStore();
+    const watch = watchPairs(store);
     const pipeline = startDataPipeline(store, new FallbackDataSource(api, new LocalDataSource(), () => {}));
     await pipeline.settled;
     const s = store.getState();
@@ -369,6 +379,8 @@ describe('blast detail ↔ model source (P9 hole layer)', () => {
     expect(detailMatchesModel(s.blast!, s.model!)).toBe(true);
     expect(s.blast!.holes).toEqual(buildBlastDetail(cfgB, api.modelB).holes); // same pattern in A and B
     expect(s.status).toBe('ready');
+    expect(watch.violations).toEqual([]);
+    watch.unsub();
     pipeline.dispose();
   });
 

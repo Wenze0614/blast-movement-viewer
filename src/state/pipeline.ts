@@ -43,7 +43,7 @@ import { isMovementFor } from '@/core/movement';
 import type { BlockModel } from '@/core/types';
 import { isAbortError, LocalDataSource, type DataSource, type DataSourceKind } from '@/data';
 import { attachDerive } from './derive';
-import type { AppState, AppStore } from './store';
+import { modelUpdate, type AppState, type AppStore } from './store';
 
 export interface DataPipeline {
   /** Resolves when the current blast (or movement) load has settled. Useful in tests. */
@@ -127,8 +127,8 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
   }
 
   /**
-   * Store a model (from either source) together with the blast detail built for it. Returns false
-   * (and writes nothing) if the request was superseded meanwhile. The detail is written only when
+   * Store a model (from either source) together with the blast detail built for it, in one store
+   * update. Returns false (and writes nothing) if the request was superseded meanwhile. The detail is written only when
    * it changed, so the hole layer doesn't rebuild for nothing. Not setBlast(): that would reset
    * params to the detail's defaults.
    */
@@ -140,8 +140,10 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
   ): Promise<boolean> {
     const detail = await detailFor(blastId, model, isCurrent);
     if (!isCurrent()) return false;
-    if (detail && detail !== store.getState().blast) store.setState({ blast: detail });
-    store.getState().setModel(model, kind);
+    // ONE store update (setModel's own update + the detail), so no subscriber ever sees the new
+    // model with the old detail or vice versa. Params are not part of it, so they are kept.
+    const blast = detail && detail !== store.getState().blast ? { blast: detail } : {};
+    store.setState({ ...modelUpdate(model, kind), ...blast });
     return true;
   }
 
@@ -211,8 +213,8 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
     s.setFallback('The API returned a movement for a different model; computed both locally.');
     // Not setBlast(): that resets params to the detail's defaults, and the user's current params
     // are exactly what this movement was computed for. Only the detail's metadata is replaced.
-    store.setState({ blast: detail });
-    s.setModel(model, src.kind);
+    // Detail + model in one update (a matched pair for every subscriber), then the movement.
+    store.setState({ ...modelUpdate(model, src.kind), blast: detail });
     store.getState().setMovement(movement, src.kind, now() - t0);
   }
 

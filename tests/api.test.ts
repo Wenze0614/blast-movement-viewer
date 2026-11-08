@@ -12,7 +12,7 @@ import { GET as getModel } from '../app/api/blasts/[id]/model/route';
 import { GET as getMovement } from '../app/api/blasts/[id]/movement/route';
 import { GET as getHealth } from '../app/api/health/route';
 import type { ApiError, BlastDetail, BlastSummary } from '@/core/api-types';
-import { BLAST_CONFIGS, getBlastConfig } from '@/core/blasts';
+import { BLAST_CONFIGS, blastDataVersion, getBlastConfig } from '@/core/blasts';
 import { generateBlockModel } from '@/core/blockModel';
 import { decodeModel, decodeMovement } from '@/core/codec';
 import { canonicalParamsString } from '@/core/hash';
@@ -69,7 +69,7 @@ describe('GET /api/blasts/:id', () => {
 
 describe('GET /api/blasts/:id/model', () => {
   it.each(BLAST_CONFIGS.map((c) => c.id))('%s → octet-stream BMV1 model, immutable, ETag = configHash; round-trips', async (id) => {
-    const res = await getModel(new Request(`${BASE}/${id}/model?v=1`), ctx(id));
+    const res = await getModel(new Request(`${BASE}/${id}/model?v=${blastDataVersion(getBlastConfig(id)!)}`), ctx(id));
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/octet-stream');
     expect(res.headers.get('cache-control')).toBe('public, s-maxage=31536000, immutable');
@@ -98,7 +98,7 @@ describe('GET /api/blasts/:id/movement', () => {
   const expected = computeMovement(model, cfg.defaultParams);
 
   it('200 octet-stream, immutable, ETag = paramsHash; body round-trips to the local result', async () => {
-    const res = await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams, '&v=abc'))), ctx(cfg.id));
+    const res = await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams, `&v=${blastDataVersion(cfg)}`))), ctx(cfg.id));
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/octet-stream');
     expect(res.headers.get('cache-control')).toBe('public, s-maxage=31536000, immutable');
@@ -155,5 +155,49 @@ describe('GET /api/blasts/:id/movement', () => {
     const res = await getMovement(new Request(movementUrl('nope', 'maxThrow=99')), ctx('nope'));
     expect(res.status).toBe(404);
     expect((await errorBody(res)).error.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('?v= data version (stale clients after a deploy)', () => {
+  const current = blastDataVersion(cfg);
+
+  it('movement: a stale v → 409 STALE_VERSION (no-store), never a movement for the current model', async () => {
+    const res = await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams, '&v=0badc0de'))), ctx(cfg.id));
+    expect(res.status).toBe(409);
+    expect(res.headers.get('content-type')).not.toBe('application/octet-stream');
+    expect(res.headers.get('etag')).toBeNull();
+    const body = await errorBody(res);
+    expect(body.error.code).toBe('STALE_VERSION');
+    expect(body.error.details).toEqual({ requested: '0badc0de', current });
+  });
+
+  it('a stale v is rejected even with a matching If-None-Match (no 304 revalidates a stale URL)', async () => {
+    const etag = computeMovement(generateBlockModel(cfg), cfg.defaultParams).paramsHash;
+    const req = new Request(movementUrl(cfg.id, query(cfg.defaultParams, '&v=0badc0de')), {
+      headers: { 'If-None-Match': `"${etag}"` },
+    });
+    expect((await getMovement(req, ctx(cfg.id))).status).toBe(409);
+  });
+
+  it('model: a stale v → 409; the current v and no v → 200', async () => {
+    const stale = await getModel(new Request(`${BASE}/${cfg.id}/model?v=0badc0de`), ctx(cfg.id));
+    expect(stale.status).toBe(409);
+    expect((await errorBody(stale)).error.code).toBe('STALE_VERSION');
+    expect((await getModel(new Request(`${BASE}/${cfg.id}/model?v=${current}`), ctx(cfg.id))).status).toBe(200);
+    expect((await getModel(new Request(`${BASE}/${cfg.id}/model`), ctx(cfg.id))).status).toBe(200);
+  });
+
+  it('movement without v (curl, tools) → 200 with the current data', async () => {
+    expect((await getMovement(new Request(movementUrl(cfg.id, query(cfg.defaultParams))), ctx(cfg.id))).status).toBe(200);
+  });
+
+  it('versions differ per blast, so one blast\'s v is stale for another', async () => {
+    const other = getBlastConfig('b1030-022')!;
+    expect(blastDataVersion(other)).not.toBe(current);
+    const res = await getMovement(
+      new Request(movementUrl(other.id, query(other.defaultParams, `&v=${current}`))),
+      ctx(other.id),
+    );
+    expect(res.status).toBe(409);
   });
 });

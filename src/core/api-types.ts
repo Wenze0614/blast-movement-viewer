@@ -59,7 +59,12 @@ export interface BlastDetail extends BlastSummary {
   disclaimer: string;
 }
 
-export type ApiErrorCode = 'NOT_FOUND' | 'INVALID_PARAMS' | 'INTERNAL';
+/**
+ * `STALE_VERSION` (409): the request's `?v=` data version is not the server's current one
+ * (an old client after a deploy). Never cached; the client falls back to local compute so its
+ * model and movement stay a consistent pair.
+ */
+export type ApiErrorCode = 'NOT_FOUND' | 'INVALID_PARAMS' | 'STALE_VERSION' | 'INTERNAL';
 
 export interface ApiError {
   error: { code: ApiErrorCode; message: string; details?: unknown };

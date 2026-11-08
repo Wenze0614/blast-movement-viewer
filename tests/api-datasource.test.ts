@@ -10,7 +10,7 @@ import { GET as getModel } from '../app/api/blasts/[id]/model/route';
 import { GET as getMovement } from '../app/api/blasts/[id]/movement/route';
 import { generateBlockModel } from '@/core/blockModel';
 import { getBlastConfig } from '@/core/blasts';
-import { computeMovement } from '@/core/movement';
+import { computeMovement, isMovementFor } from '@/core/movement';
 import { createDataSource, LocalDataSource } from '@/data';
 import { startDataPipeline } from '@/state/pipeline';
 import { createAppStore } from '@/state/store';
@@ -18,13 +18,17 @@ import { createAppStore } from '@/state/store';
 vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), connection: async () => {} }));
 
 let apiUp = true;
+/** Simulates a client bundle built against another config: its `?v=` is not the server's. */
+let staleClient = false;
 /** Movement requests are held until released, so tests can order responses. */
 let gate: Promise<void> | null = null;
 
 /** fetch → the app's GET handlers, as `next start` would route them. */
 const routedFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   if (!apiUp) throw new TypeError('fetch failed');
-  const req = new Request(new URL(String(input), 'http://localhost'), init);
+  const url = new URL(String(input), 'http://localhost');
+  if (staleClient && url.searchParams.has('v')) url.searchParams.set('v', '0badc0de');
+  const req = new Request(url, init);
   const path = new URL(req.url).pathname.split('/').filter(Boolean); // ['api','blasts',id?,leaf?]
   const ctx = { params: Promise.resolve({ id: path[2] }) };
   if (path.length === 2) return getBlasts();
@@ -40,6 +44,7 @@ const model = generateBlockModel(cfg);
 
 beforeEach(() => {
   apiUp = true;
+  staleClient = false;
   gate = null;
   routedFetch.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -130,6 +135,25 @@ describe('ApiDataSource through the route handlers', () => {
     s = store.getState();
     expect(s.source).toBe('api');
     expect(s.fallback).toBeNull();
+    pipeline.dispose();
+  });
+
+  it('a stale client (old ?v=) never gets the current model or movement: 409 → local for both, a consistent pair', async () => {
+    staleClient = true;
+    const { store, pipeline } = setup();
+    await pipeline.settled;
+    const s = store.getState();
+    expect(s.status).toBe('ready');
+    expect(s.source).toBe('local');
+    expect(s.fallback).toMatch(/409 STALE_VERSION/);
+    expect(isMovementFor(s.movement!, s.model!, s.params)).toBe(true);
+    // Every model / movement request was refused: no server data reached this client.
+    const binaryCalls = routedFetch.mock.calls
+      .map(([u], i) => ({ url: String(u), result: routedFetch.mock.results[i] }))
+      .filter(({ url }) => /\/(model|movement)\?/.test(url));
+    expect(binaryCalls.length).toBeGreaterThanOrEqual(2);
+    const statuses = await Promise.all(binaryCalls.map(async ({ result }) => (await (result.value as Promise<Response>)).status));
+    expect(new Set(statuses)).toEqual(new Set([409]));
     pipeline.dispose();
   });
 });

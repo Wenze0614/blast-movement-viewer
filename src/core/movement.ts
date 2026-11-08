@@ -424,6 +424,21 @@ export function modelHashContext(model: BlockModel): string {
   return `movement/v${MOVEMENT_MODEL_VERSION};model=${model.configHash}`;
 }
 
+/**
+ * Is `movement` the result for exactly this (model, params)? `paramsHash` binds both: it hashes
+ * the model's configHash (+ heuristic version) and the canonical params, so a movement computed
+ * for another model or other params never matches. The block count is checked too, so a
+ * mismatched payload can never reach geometry packing. Use before pairing a movement with a model
+ * that came from a different request (or a different source).
+ */
+export function isMovementFor(movement: MovementResult, model: BlockModel, params: BlastParameters): boolean {
+  return (
+    movement.delay.length === model.count &&
+    movement.end.length === 3 * model.count &&
+    movement.paramsHash === hashParams(params, modelHashContext(model))
+  );
+}
+
 function worldCellMapper(face: BlastParameters['freeFace'], nA: number, nB: number) {
   switch (face) {
     case 'east':

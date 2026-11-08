@@ -6,7 +6,7 @@
  */
 import type { ApiError, BlastDetail, BlastSummary } from '@/core/api-types';
 import { blastDataVersion, getBlastConfig } from '@/core/blasts';
-import { decodeModel, decodeMovement } from '@/core/codec';
+import { CodecError, decodeModel, decodeMovement } from '@/core/codec';
 import { canonicalParamsString } from '@/core/hash';
 import type { BlastParameters, BlockModel, MovementResult } from '@/core/types';
 import type { DataSource, DataSourceKind } from './index';
@@ -113,7 +113,13 @@ export class ApiDataSource implements DataSource {
 
   async getMovement(id: string, params: BlastParameters, signal?: AbortSignal): Promise<MovementResult> {
     const [model, res] = await Promise.all([this.getModel(id, signal), this.request(movementPath(id, params), signal)]);
-    return decodeMovement(await res.arrayBuffer(), model);
+    try {
+      return decodeMovement(await res.arrayBuffer(), model);
+    } catch (err) {
+      // The server's model changed under our cached one: drop it so the next getModel refetches.
+      if (err instanceof CodecError && err.code === 'MODEL_MISMATCH') this.models.delete(id);
+      throw err;
+    }
   }
 }
 

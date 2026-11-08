@@ -6,7 +6,17 @@
  * and the inputs it captured (blastId, model, params) are still the store's. A superseded request
  * that rejects with an ordinary error is ignored, so it can never overwrite the newer request's
  * loading/ready status.
+ *
+ * Model–movement binding: a movement is applied only if it was computed for the store's CURRENT
+ * model and params (`isMovementFor`: paramsHash binds the model's configHash and the canonical
+ * params; block counts must agree). The model and the movement are separate requests and, with
+ * the API's per-call fallback, can come from different sources (e.g. a local model loaded while
+ * the API was down, then an API movement after it recovered on a newer deploy). On a mismatch the
+ * movement is dropped, the model is reloaded from the DataSource, and the movement is requested
+ * again for that model, so the store ends with a consistent pair. A second mismatch is reported
+ * as an error instead of being applied.
  */
+import { isMovementFor } from '@/core/movement';
 import { isAbortError, type DataSource } from '@/data';
 import { attachDerive } from './derive';
 import type { AppStore } from './store';
@@ -36,7 +46,8 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     store.getState().setStatus('error', message(err));
   };
 
-  async function loadMovement(): Promise<void> {
+  /** `resync`: may this load reload the model once if the movement doesn't belong to it? */
+  async function loadMovement(resync = true): Promise<void> {
     const { model, blastId, params } = store.getState();
     if (!model) return;
     movementCtrl?.abort();
@@ -50,6 +61,19 @@ export function startDataPipeline(store: AppStore, data: DataSource): DataPipeli
     try {
       const movement = await data.getMovement(blastId, params, ctrl.signal);
       if (!isCurrent()) return;
+      if (!isMovementFor(movement, model, params)) {
+        const detail = `movement ${movement.paramsHash} (${movement.delay.length} blocks, ${data.kind}) does not belong to model ${model.configHash} (${model.count} blocks) with the current params`;
+        if (!resync) {
+          console.error(`[bmv] ${detail}; giving up.`);
+          store.getState().setStatus('error', 'Model and movement are out of sync; reload the page.');
+          return;
+        }
+        console.warn(`[bmv] ${detail}; reloading a consistent model + movement.`);
+        const fresh = await data.getModel(blastId, ctrl.signal);
+        if (!isCurrent()) return;
+        if (fresh !== model) store.getState().setModel(fresh, data.kind);
+        return await loadMovement(false);
+      }
       store.getState().setMovement(movement, data.kind, now() - t0);
     } catch (err) {
       fail(err, isCurrent);

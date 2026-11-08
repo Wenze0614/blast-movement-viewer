@@ -2,18 +2,35 @@
  * animate/blocks (ADR-2, M2/M4): ONE Mesh of InstancedBufferGeometry (unit box) with an owned
  * ShaderMaterial. GPU interpolates start → end; per-frame CPU work is the uProgress uniform.
  * Buffers are rebuilt only when (model, movement) changes; colour changes rewrite aColor once.
+ *
+ * P1 colour modes: a "colour key" names everything the colours depend on for the active mode
+ * (grade: model; outcome: polygons + scenario; movement: movement). aColor is rewritten only when
+ * the key changes, so scrubbing never repaints except once in outcome mode as the blast starts
+ * (in-situ view → post-blast view, state/views.ts). P3 section / ore-only are uniforms.
  */
 import * as THREE from 'three';
-import { GRADE_PALETTE } from '@/state/palette';
+import { GRADE_PALETTE, OUTCOME_PALETTE, viridisSrgb } from '@/state/palette';
 import type { AppStoreState } from '@/state/store';
+import { distanceRange, outcomeClasses, outcomeScenario, sectionPlane } from '@/state/views';
 import fragmentShader from '../shaders/blocks.frag.glsl';
 import { createBlocksUniforms } from '../shaders/blocks.uniforms';
 import vertexShader from '../shaders/blocks.vert.glsl';
 import type { SystemFactory } from '../types';
-import { packClassColours, packInstances, type InstancePack } from './blocksAttributes';
+import {
+  packClassColours,
+  packInstances,
+  packOreFlags,
+  packRampColours,
+  rampLut,
+  type InstancePack,
+} from './blocksAttributes';
 
-/** Instanced unit box with the four owned instance attributes. */
-export function buildBlocksGeometry(pack: InstancePack, colours: Float32Array): THREE.InstancedBufferGeometry {
+/** Instanced unit box with the five owned instance attributes. */
+export function buildBlocksGeometry(
+  pack: InstancePack,
+  colours: Float32Array,
+  ore: Float32Array = new Float32Array(pack.count),
+): THREE.InstancedBufferGeometry {
   const geometry = new THREE.InstancedBufferGeometry();
   const box = new THREE.BoxGeometry(1, 1, 1);
   geometry.setIndex(box.getIndex());
@@ -23,6 +40,7 @@ export function buildBlocksGeometry(pack: InstancePack, colours: Float32Array): 
   geometry.setAttribute('aEnd', new THREE.InstancedBufferAttribute(pack.end, 3));
   geometry.setAttribute('aDelay', new THREE.InstancedBufferAttribute(pack.delay, 1));
   geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(colours, 3));
+  geometry.setAttribute('aOre', new THREE.InstancedBufferAttribute(ore, 1));
   geometry.instanceCount = pack.count;
   return geometry;
 }
@@ -36,10 +54,37 @@ const EMPTY_PACK: InstancePack = {
   blockSize: [1, 1, 1],
 };
 
-function coloursFor(state: Pick<AppStoreState, 'model' | 'colourMode'>, out?: Float32Array): Float32Array {
-  const model = state.model;
+type ColourState = Pick<AppStoreState, 'model' | 'movement' | 'polygons' | 'colourMode' | 'outcomeLine' | 'progress'>;
+
+/**
+ * Everything the block colours depend on, for the mode that is actually painted. Outcome needs the
+ * dig lines and movement needs a movement; until they exist the mode falls back to grade (the
+ * legend says so). Compared element by element.
+ */
+export function colourKey(s: ColourState): readonly unknown[] {
+  if (s.colourMode === 'outcome' && s.movement && s.polygons) {
+    return ['outcome', s.model, s.movement, s.polygons, outcomeScenario(true, s.progress, s.outcomeLine)];
+  }
+  if (s.colourMode === 'movement' && s.movement) return ['movement', s.model, s.movement];
+  return ['grade', s.model];
+}
+
+const sameKey = (a: readonly unknown[], b: readonly unknown[]) =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
+
+let viridisLut: Float32Array | null = null;
+
+function coloursFor(s: ColourState, out?: Float32Array): Float32Array {
+  const { model, movement, polygons } = s;
   if (!model) return new Float32Array(0);
-  // Stage 2 ships the grade palette only; outcome/movement modes (P1) fall back to grade.
+  if (s.colourMode === 'outcome' && movement && polygons) {
+    const classes = outcomeClasses(model, movement, polygons, outcomeScenario(true, s.progress, s.outcomeLine));
+    return packClassColours(classes, OUTCOME_PALETTE, out);
+  }
+  if (s.colourMode === 'movement' && movement) {
+    viridisLut ??= rampLut(viridisSrgb);
+    return packRampColours(movement.distance, distanceRange(movement.distance), viridisLut, out);
+  }
   return packClassColours(model.oreClass, GRADE_PALETTE, out);
 }
 
@@ -59,10 +104,15 @@ export const createBlocksSystem: SystemFactory = (ctx) => {
     geometry.dispose();
   });
 
+  /** Key of the colours currently in aColor; a repaint for the same key is skipped. */
+  let painted: readonly unknown[] = [];
+
   const rebuild = () => {
     const s = store.getState();
     const pack = s.model ? packInstances(s.model, s.movement) : EMPTY_PACK;
-    const next = buildBlocksGeometry(pack, coloursFor(s));
+    const ore = s.model ? packOreFlags(s.model.grade, s.model.grades.cutoff) : new Float32Array(0);
+    const next = buildBlocksGeometry(pack, coloursFor(s), ore);
+    painted = colourKey(s);
     geometry.dispose();
     geometry = next;
     mesh.geometry = next;
@@ -72,10 +122,23 @@ export const createBlocksSystem: SystemFactory = (ctx) => {
   };
 
   const recolour = () => {
+    const s = store.getState();
+    const key = colourKey(s);
+    if (sameKey(key, painted)) return; // e.g. a rebuild for the same change already painted it
     const attr = geometry.getAttribute('aColor') as THREE.InstancedBufferAttribute;
     if (attr.count === 0) return;
-    coloursFor(store.getState(), attr.array as Float32Array);
+    coloursFor(s, attr.array as Float32Array);
+    painted = key;
     attr.needsUpdate = true;
+    ctx.invalidate();
+  };
+
+  const applySection = () => {
+    uniforms.uSection.value.set(...sectionPlane(store.getState().section));
+    ctx.invalidate();
+  };
+  const applyOreOnly = () => {
+    uniforms.uOreOnly.value = store.getState().oreOnly ? 1 : 0;
     ctx.invalidate();
   };
 
@@ -84,17 +147,21 @@ export const createBlocksSystem: SystemFactory = (ctx) => {
     rebuild,
     { equalityFn: (a, b) => a[0] === b[0] && a[1] === b[1] },
   );
-  const unsubColour = store.subscribe((s) => s.colourMode, recolour);
+  // Registered after unsubData: when both fire for one change, the rebuild paints first and the
+  // recolour sees the same key and skips.
+  const unsubColour = store.subscribe(colourKey, recolour, { equalityFn: sameKey });
   const unsubProgress = store.subscribe((s) => s.progress, () => ctx.invalidate());
-  bag.track(unsubData);
-  bag.track(unsubColour);
-  bag.track(unsubProgress);
+  const unsubSection = store.subscribe((s) => s.section, applySection);
+  const unsubOreOnly = store.subscribe((s) => s.oreOnly, applyOreOnly);
+  for (const unsub of [unsubData, unsubColour, unsubProgress, unsubSection, unsubOreOnly]) bag.track(unsub);
 
   return {
     name: 'blocks',
     phase: 'animate',
     init() {
       rebuild();
+      applySection();
+      applyOreOnly();
     },
     update() {
       // M4: the only per-frame CPU work for the blocks.

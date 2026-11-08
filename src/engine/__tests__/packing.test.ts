@@ -2,11 +2,21 @@
 import { describe, expect, it } from 'vitest';
 import { BLOCK_ANIMATION_DURATION, animatedCentroid, animatedScale, blockProgress } from '@/core/easing';
 import { OreClass, type BlockModel, type MovementResult } from '@/core/types';
-import { GRADE_PALETTE } from '@/state/palette';
+import { GRADE_PALETTE, OUTCOME_PALETTE, viridisSrgb } from '@/state/palette';
+import { classifyOutcomes, Outcome } from '@/state/views';
+import frag from '../shaders/blocks.frag.glsl';
 import easeChunk from '../shaders/chunks/ease.glsl';
 import { createBlocksUniforms } from '../shaders/blocks.uniforms';
 import vert from '../shaders/blocks.vert.glsl';
-import { hexToLinearRgb, packClassColours, packInstances, srgbToLinear } from '../systems/blocksAttributes';
+import {
+  hexToLinearRgb,
+  packClassColours,
+  packInstances,
+  packOreFlags,
+  packRampColours,
+  rampLut,
+  srgbToLinear,
+} from '../systems/blocksAttributes';
 import { digLineElevation, ringsToSegments } from '../systems/digLinesGeometry';
 
 const grid = { origin: [0, 0, 1030] as [number, number, number], blockSize: [2.5, 2.5, 2.5] as [number, number, number], nx: 2, ny: 1, nz: 1 };
@@ -74,6 +84,60 @@ describe('colours', () => {
   });
 });
 
+describe('P1 colour modes: packing', () => {
+  const triple = (a: Float32Array, i: number) => Array.from(a.subarray(3 * i, 3 * i + 3));
+
+  it('outcome classes → OUTCOME_PALETTE colours (fixture with every class)', () => {
+    const classes = classifyOutcomes(new Uint8Array([1, 0, 1, 0]), new Float32Array([2, 1, 0.1, 0.1]), 0.5);
+    const out = packClassColours(classes, OUTCOME_PALETTE);
+    expect(triple(out, 0)).toEqual(Array.from(new Float32Array(hexToLinearRgb('#14b8a6'))));
+    expect(triple(out, 1)).toEqual(Array.from(new Float32Array(hexToLinearRgb('#d946ef'))));
+    expect(triple(out, 2)).toEqual(Array.from(new Float32Array(hexToLinearRgb('#f97316'))));
+    expect(triple(out, 3)).toEqual(Array.from(new Float32Array(hexToLinearRgb(OUTCOME_PALETTE[Outcome.WasteToWaste].hex))));
+  });
+
+  it('viridis LUT: linear RGB of the ramp, endpoints exact', () => {
+    const lut = rampLut(viridisSrgb, 256);
+    expect(lut).toHaveLength(256 * 3);
+    expect(Array.from(lut.subarray(0, 3))).toEqual(Array.from(new Float32Array(hexToLinearRgb('#440154'))));
+    expect(Array.from(lut.subarray(255 * 3))).toEqual(Array.from(new Float32Array(hexToLinearRgb('#fde725'))));
+  });
+
+  it('packRampColours: min → first LUT entry, max → last, clamped; degenerate range → first', () => {
+    const lut = rampLut(viridisSrgb, 256);
+    const first = Array.from(lut.subarray(0, 3));
+    const last = Array.from(lut.subarray(255 * 3));
+    const out = packRampColours(new Float32Array([0.8, 13.5, 7.15, -1, 99]), [0.8, 13.5], lut);
+    expect(triple(out, 0)).toEqual(first);
+    expect(triple(out, 1)).toEqual(last);
+    expect(triple(out, 2)).toEqual(Array.from(lut.subarray(128 * 3, 128 * 3 + 3))); // midpoint: round(127.5) = 128
+    expect(triple(out, 3)).toEqual(first);
+    expect(triple(out, 4)).toEqual(last);
+    const flat = packRampColours(new Float32Array([2, 2]), [2, 2], lut);
+    expect(triple(flat, 1)).toEqual(first);
+  });
+
+  it('packRampColours writes in place and checks the length', () => {
+    const lut = rampLut(viridisSrgb, 4);
+    const out = new Float32Array(6);
+    expect(packRampColours(new Float32Array([0, 1]), [0, 1], lut, out)).toBe(out);
+    expect(() => packRampColours(new Float32Array([0, 1]), [0, 1], lut, new Float32Array(3))).toThrow();
+  });
+});
+
+describe('P3 ore-only flag: packing', () => {
+  it('aOre = 1 where grade ≥ cut-off (true class, as reconcile), else 0', () => {
+    const flags = packOreFlags(new Float32Array([0.1, 0.5, 0.49, 3.2]), 0.5);
+    expect(Array.from(flags)).toEqual([0, 1, 0, 1]);
+  });
+
+  it('writes in place and checks the length', () => {
+    const out = new Float32Array(2);
+    expect(packOreFlags(new Float32Array([1, 0]), 0.5, out)).toBe(out);
+    expect(() => packOreFlags(new Float32Array([1, 0]), 0.5, new Float32Array(1))).toThrow();
+  });
+});
+
 describe('block uniforms and shader (ADR-2)', () => {
   it('uniform defaults: uDur = core BLOCK_ANIMATION_DURATION, uScaleEnd 1, progress 0', () => {
     const u = createBlocksUniforms();
@@ -90,6 +154,18 @@ describe('block uniforms and shader (ADR-2)', () => {
     expect(vert).toContain(easeChunk);
     expect(vert).toContain('mix(1.0, uScaleEnd, t)');
     for (const a of ['aStart', 'aEnd', 'aDelay', 'aColor']) expect(vert).toMatch(new RegExp(`attribute \\w+ ${a};`));
+  });
+
+  it('P3: uSection plane + uOreOnly hide whole blocks via discard (section off and ore-only off by default)', () => {
+    const u = createBlocksUniforms();
+    expect(u.uSection.value.toArray()).toEqual([0, 0, 0, -1]);
+    expect(u.uOreOnly.value).toBe(0);
+    expect(vert).toContain('uniform vec4 uSection;');
+    expect(vert).toContain('attribute float aOre;');
+    // Tested on the ANIMATED centroid p, so it holds at any scrub progress.
+    expect(vert).toContain('dot(uSection.xyz, p) < uSection.w');
+    expect(vert).toContain('uOreOnly * (1.0 - aOre)');
+    expect(frag).toMatch(/if \(vHidden > 0\.5\) discard;/);
   });
 
   it('no popping: every block is exactly at start at progress 0 and at end at progress 1', () => {

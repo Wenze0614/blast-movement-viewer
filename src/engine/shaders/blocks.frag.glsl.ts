@@ -10,10 +10,12 @@ uniform float uEdgeDarkening;
 varying vec3 vColor;
 varying vec3 vNormal;
 varying vec3 vLocal;
+varying float vHidden;
 
 ${lighting}
 
 void main() {
+  if (vHidden > 0.5) discard; // P3: section plane / ore-only (decided per block in the vertex shader)
   vec3 n = normalize(vNormal);
   vec3 c = bmvHemiDirectional(vColor, n, uLightDir, uSkyColor, uGroundColor);
   c *= 1.0 - uEdgeDarkening * bmvEdgeFactor(vLocal);

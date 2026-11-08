@@ -29,8 +29,9 @@
  *      config and the model (deterministic, so identical to what the API would serve);
  *   3. otherwise (an API model from a deploy with another config) the detail is fetched from the
  *      data source and used if it matches the model;
- *   4. last resort: the holes are re-sampled from the model with the detail's own pattern, so the
- *      layer never shows grades from a model that isn't on screen.
+ *   4. last resort: the holes are re-sampled from the model with the model's own pattern
+ *      (`model.pattern`, which the movement's firing sequence uses), so the layer never shows
+ *      grades or timing from a model that isn't on screen.
  * "Matches" is checked, not assumed: the detail's drill pattern must equal `model.pattern` (the
  * firing sequence the movement uses) and `generateHoles(model, model.pattern, detail.freeFace)`
  * must reproduce `detail.holes`; a re-sampled detail takes the model's pattern. Params are never touched (no setBlast). `isCurrent()` is checked after

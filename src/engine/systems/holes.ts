@@ -11,7 +11,8 @@
  *   the columns through the ore read as context.
  * - Lighting: the same hand-written chunk as the blocks, so no scene lights are added and the
  *   blocks are unaffected.
- * - Illustrative only: the movement heuristic never reads the pattern (labelled in the UI).
+ * - Illustrative layout: the hole positions are not a movement input, but the pattern's burden and
+ *   spacing shape the firing sequence the movement follows; the holes can show it (firing time).
  * - Depth: at full opacity (before the blast) the material is OPAQUE (depth write on, opaque
  *   pass), so the stick-ups occlude and sort like solid geometry. Only while fading
  *   (0 < opacity < 1) is it transparent with depthWrite: false, so a fading hole never punches

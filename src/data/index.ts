@@ -9,9 +9,12 @@
  */
 import type { BlastDetail, BlastSummary } from '@/core/api-types';
 import type { BlastParameters, BlockModel, MovementResult } from '@/core/types';
+import { ApiDataSource, FallbackDataSource, type ApiDataSourceOptions } from './api';
 import { LocalDataSource } from './local';
 
 export { LocalDataSource, isAbortError } from './local';
+export { ApiDataSource, ApiRequestError, FallbackDataSource, modelPath, movementPath } from './api';
+export type { ApiDataSourceOptions } from './api';
 
 export type DataSourceKind = 'api' | 'local';
 
@@ -27,22 +30,22 @@ export interface CreateDataSourceOptions {
   /** Defaults to `process.env.NEXT_PUBLIC_DATA_SOURCE`, then 'api'. */
   kind?: DataSourceKind;
   /**
-   * Called once when an API call fails and the source falls back to local compute
-   * (the UI shows an "offline mode" toast). Aborts are not failures.
+   * Called each time an API call fails and local compute serves it instead (the UI shows a
+   * "Local fallback" badge). Aborts are not failures.
    */
   onFallback?: (error: unknown) => void;
+  /** API source options (base URL, fetch, timeout); tests inject a fetch. */
+  api?: ApiDataSourceOptions;
 }
 
 /**
- * Factory + fallback. Stage 2 (Checkpoint 1) ships only the local source: 'api' is accepted but
- * falls back to local with a console note until ApiDataSource lands (Stage 4).
+ * Factory (ADR-9). 'api' (the default, in production and in dev, where the same app serves the
+ * routes) → the API with automatic fallback to local compute; 'local' → local compute only.
  */
 export function createDataSource(options: CreateDataSourceOptions = {}): DataSource {
   const kind = options.kind ?? parseKind(process.env.NEXT_PUBLIC_DATA_SOURCE) ?? 'api';
-  if (kind === 'api') {
-    console.info('[bmv] DataSource: the API source is not implemented yet; using local compute.');
-  }
-  return new LocalDataSource();
+  if (kind === 'local') return new LocalDataSource();
+  return new FallbackDataSource(new ApiDataSource(options.api), new LocalDataSource(), options.onFallback);
 }
 
 function parseKind(value: string | undefined): DataSourceKind | undefined {

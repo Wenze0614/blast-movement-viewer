@@ -98,7 +98,9 @@ npm run build && npm run start   # production build
   start to end with a throw arc and the swell scale, so scrubbing costs **one uniform write per
   frame** at any block count. No `onBeforeCompile` patching. The holes use the same approach (one
   instanced cylinder mesh, one opacity uniform). Lighting is a small hand-written chunk shared by
-  both, so there are no scene lights.
+  both, so there are no scene lights. The hole material is opaque before the blast and switches to
+  transparent with `depthWrite: false` only while it fades, so fading holes never hide what is
+  behind them.
 - **Render on demand.** The loop draws only when something invalidates the frame or a system is
   animating (playback). React never re-renders per frame: the engine subscribes to discrete store
   changes and reads continuous ones (`progress`) with `getState()`.

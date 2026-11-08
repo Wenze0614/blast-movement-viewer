@@ -12,6 +12,10 @@
  * - Lighting: the same hand-written chunk as the blocks, so no scene lights are added and the
  *   blocks are unaffected.
  * - Illustrative only: the movement heuristic never reads the pattern (labelled in the UI).
+ * - Depth: at full opacity (before the blast) the material is OPAQUE (depth write on, opaque
+ *   pass), so the stick-ups occlude and sort like solid geometry. Only while fading
+ *   (0 < opacity < 1) is it transparent with depthWrite: false, so a fading hole never punches
+ *   depth "holes" that hide blocks or the other holes behind it. At opacity 0 the mesh is hidden.
  */
 import * as THREE from 'three';
 import type { BlastDetail } from '@/core/api-types';
@@ -46,7 +50,8 @@ export const createHolesSystem: SystemFactory = (ctx) => {
       vertexShader: holesVert,
       fragmentShader: holesFrag,
       uniforms,
-      transparent: true,
+      transparent: false, // switched by applyVisibility() while fading
+      depthWrite: true,
     }),
   );
   const base = bag.track(new THREE.CylinderGeometry(1, 1, 1, RADIAL_SEGMENTS, 1, false));
@@ -65,6 +70,9 @@ export const createHolesSystem: SystemFactory = (ctx) => {
     const s = store.getState();
     const opacity = holesOpacity(s.progress);
     uniforms.uOpacity.value = opacity;
+    const fading = opacity < 1;
+    material.transparent = fading;
+    material.depthWrite = !fading;
     mesh.visible = s.layers.holes && geometry.instanceCount > 0 && opacity > 0;
   };
 

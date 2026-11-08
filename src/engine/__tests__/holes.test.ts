@@ -140,6 +140,30 @@ describe('holes system (P9)', () => {
     ctx.bag.disposeAll();
   });
 
+  it('opaque with depth write before the blast; transparent without depth write only while fading', async () => {
+    const ctx = mockCtx();
+    const system = createHolesSystem(ctx, {});
+    await system.init?.();
+    const s = ctx.store.getState();
+    s.setBlast(detail);
+    s.setModel(model, 'local');
+    s.setMovement(movement, 'local');
+    const mesh = holesMeshes(ctx.scene)[0];
+    const material = mesh.material as THREE.ShaderMaterial;
+    const state = () => ({ transparent: material.transparent, depthWrite: material.depthWrite });
+
+    ctx.store.getState().setProgress(0);
+    system.update?.(frame);
+    expect(state()).toEqual({ transparent: false, depthWrite: true });
+    ctx.store.getState().setProgress(HOLES_FADE_END / 2);
+    system.update?.(frame);
+    expect(state()).toEqual({ transparent: true, depthWrite: false });
+    ctx.store.getState().setProgress(0); // rewound: solid again
+    system.update?.(frame);
+    expect(state()).toEqual({ transparent: false, depthWrite: true });
+    ctx.bag.disposeAll();
+  });
+
   it('rebuilds ONLY when the blast detail changes (not on params, movement, progress, colour mode)', async () => {
     const ctx = mockCtx();
     const system = createHolesSystem(ctx, {});

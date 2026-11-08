@@ -62,5 +62,22 @@ heuristic stand-in; never describe it as physics.
 
 ## Workflow
 
-One workstream per folder, small focused PRs, readable commit history. Don't refactor outside the
-task's scope.
+One branch and one PR per feature, off `main`; small focused PRs, readable commit history. Don't
+refactor outside the task's scope.
+
+## Review (every PR)
+
+Codex reviews every PR before it merges. After the gates pass and the branch is pushed:
+
+```sh
+scripts/codex-review.sh /tmp/review-r1.md                    # → VERDICT: PASS | CHANGES REQUESTED
+scripts/codex-review.sh /tmp/review-r2.md /tmp/review-r1.md  # follow-up: verifies earlier findings
+```
+
+- It runs `codex exec` read-only on `git diff origin/main...HEAD` with
+  `scripts/codex-review-prompt.md`. Exit code 0 = PASS, 1 = CHANGES REQUESTED, 2 = no verdict.
+- Fix every BLOCKING finding (with a regression test that fails before the fix), rerun the gates,
+  push, and run a follow-up round with the previous output until PASS. NON-BLOCKING findings are
+  judgement calls: fix or say why not in the PR.
+- Summarise each round (findings, fixes, verdict) in the PR description. A PR merges only after
+  PASS; merging stays the human's call.

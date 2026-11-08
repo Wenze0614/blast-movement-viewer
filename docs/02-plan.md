@@ -266,22 +266,25 @@ export interface DataSource {
 ### ADR-11: Data transport (binary, columnar)
 - **Options:** JSON (3–5× bigger, slow `JSON.parse`, boxed numbers); **custom length-prefixed binary SoA**; Apache Arrow IPC; 3D Tiles / tiled glTF.
 - **Choice:** custom binary with a JSON header and a **shared codec** (`core/codec.ts`) used by the server (encode) and the client (decode → typed-array *views*, no copy). Round-trip unit test.
-- **Layout** (little-endian, sections 4-byte aligned; Float32, then Uint32, then Uint8; `schemaVersion` 2 since sparse models, v1 payloads are rejected):
+- **Layout** (little-endian, sections 4-byte aligned; Float32, Uint32, Uint16, then Uint8; `schemaVersion` 3: compact, older payloads are rejected):
 
-  | Section | Type | Length |
-  |---|---|---|
-  | magic `"BMV1"` | 4 bytes | |
-  | header byte length | uint32 | |
-  | header JSON (utf-8, padded) | | `{ schemaVersion, kind, count, grid, grades, fields:[{name,type,offset,length}], … }` |
-  | `centroid` | Float32 | 3N |
-  | `grade`, `density`, `tonnes` | Float32 | N each |
-  | `cell` (grid cell `i + nx·(j + ny·k)` per block, strictly increasing) | Uint32 | N |
-  | `rockType`, `oreClass` | Uint8 | N each |
+  | Section | Type | Length | Sent |
+  |---|---|---|---|
+  | magic `"BMV1"` | 4 bytes | | always |
+  | header byte length | uint32 | | always |
+  | header JSON (utf-8, padded) | | `{ schemaVersion, kind, count, grid, grades, pattern, byRock, fields:[{name,type,offset,length}], … }` | always |
+  | `grade` | Float32 | N | always |
+  | `cell` (grid cell `i + nx·(j + ny·k)` per block, strictly increasing) | Uint32 | N | always |
+  | `rockType` | Uint8 | N | always |
+  | `centroid` | Float32 | 3N | only if `origin + (ijk + ½)·blockSize` would not reproduce it |
+  | `density`, `tonnes` | Float32 | N each | only if not one value per rock type (header `byRock`) |
+  | `oreClass` | Uint8 | N | only if `classifyGrade(grade)` would not reproduce it |
 
-  N = blocks present (≤ nx·ny·nz: the grid is the bounding box of an irregular blast outline). Decode rejects `cell` values that are not strictly increasing or lie outside the grid (`BAD_DATA`).
+  N = blocks present (≤ nx·ny·nz: the grid is the bounding box of an irregular blast outline). Decode rejects `cell` values that are not strictly increasing or lie outside the grid (`BAD_DATA`). The encoder checks every derivation bit for bit, so a round trip is always exact.
 
-  Movement payload: `end` (Float32 3N), `delay` (Float32 N), `surface.height` (Float32 nx·ny). The header carries `looseScale`, `postGrid`, the echoed `params` and `paramsHash`.
-- **Size:** 30 B/block → 3,200 blocks ≈ 97 KB, 27,088 ≈ 813 KB, before compression. ⚠️ Check whether Vercel compresses `application/octet-stream`; if not, pre-compress or accept the size.
+  Movement payload: `delay` (Float32 N), `surface.height` (Float32 nx·ny), and `slotCell` (Uint32 N, post-grid cell) + `slotLevel` (Uint16 N, stack level) decoded with the canonical `slotPosition` formula, or `end` (Float32 3N) if any position would not reproduce from its slot. The header carries `looseScale`, `postGrid`, the echoed `params` and `paramsHash`.
+- **Size:** 9 B/block (model) + 10 B/block (movement) for generated models: 2,074,720 blocks ≈ 18.7 + 21.5 MB, gzipped 12.9 + 12.8 MB.
+- **Compression:** payloads are always gzipped and sent as `application/gzip` (Next.js route handlers drop `Content-Encoding`, and `next start` does not compress binary bodies); the client inflates them (`data/api.ts readPayload`).
 - **At scale:** Arrow/Parquet for analytics interop, or **tiled, range-requestable chunks** (per bench/flitch tile + LOD level) streamed into the instanced renderer.
 
 ### ADR-12: Caching, validation and compute placement

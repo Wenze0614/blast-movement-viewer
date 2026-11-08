@@ -1,10 +1,11 @@
 'use client';
-/** Right panel (ADR-8): title, blast + scrubber, layers, legend, reconciliation. */
+/** Right panel (ADR-8): title, blast + scrubber, view controls + legend, layers, reconciliation. */
 import BlastControls from './BlastControls';
 import LayerToggles from './LayerToggles';
 import Legend from './Legend';
 import StatsTable from './StatsTable';
 import StatusLine from './StatusLine';
+import ViewControls from './ViewControls';
 
 export default function Panel() {
   return (
@@ -16,9 +17,12 @@ export default function Panel() {
       <section aria-label="Blast playback" className="border-t border-border pt-3">
         <BlastControls />
       </section>
-      <section aria-label="Layers and legend" className="grid grid-cols-2 gap-3 border-t border-border pt-3">
-        <LayerToggles />
+      <section aria-label="View" className="space-y-3 border-t border-border pt-3">
+        <ViewControls />
         <Legend />
+      </section>
+      <section aria-label="Layers" className="border-t border-border pt-3">
+        <LayerToggles />
       </section>
       <section aria-label="Reconciliation" className="border-t border-border pt-3">
         <h2 className="mb-1 text-xs font-semibold tracking-wide text-muted uppercase">Reconciliation</h2>

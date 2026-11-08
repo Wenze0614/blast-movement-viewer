@@ -7,8 +7,8 @@
  * Remounted per blast (`key`), so a pending draft never leaks into another blast.
  */
 import { useEffect, useRef, useState } from 'react';
-import { PARAM_RANGES, type NumericParamKey } from '@/core/params';
-import type { BlastParameters } from '@/core/types';
+import { INITIATIONS, PARAM_RANGES, type NumericParamKey } from '@/core/params';
+import type { BlastParameters, Initiation } from '@/core/types';
 import { useAppStore } from '@/state/hooks';
 import { fmt } from './format';
 
@@ -22,6 +22,20 @@ interface SliderSpec {
   digits: number;
   hint: string;
 }
+
+/** Labels for the initiation select ('left' / 'right' seen from behind the blast). */
+export const INITIATION_LABELS: Readonly<Record<Initiation, string>> = {
+  row: 'Row by row (straight)',
+  v: 'V from the front centre',
+  'echelon-left': 'Echelon from the left corner',
+  'echelon-right': 'Echelon from the right corner',
+};
+
+/** The firing sequence: it sets the throw direction and the order blocks start moving. */
+export const TIMING_SLIDERS: readonly SliderSpec[] = [
+  { key: 'rowDelayMs', label: 'Row delay', unit: 'ms', step: 1, digits: 0, hint: 'Delay between rows (one burden)' },
+  { key: 'holeDelayMs', label: 'Hole delay', unit: 'ms', step: 1, digits: 0, hint: 'Delay between holes along a row, away from the initiation point' },
+];
 
 /** Shown first: the parameters that change the story most. */
 export const MAIN_SLIDERS: readonly SliderSpec[] = [
@@ -121,6 +135,28 @@ export default function ParamsPanel() {
           Reset to defaults
         </button>
       </div>
+      <fieldset className="space-y-2 rounded border border-border p-2">
+        <legend className="px-1 text-xs text-muted">Firing sequence</legend>
+        <label className="flex items-center justify-between gap-2 text-xs" title="Seen from behind the blast, looking at the free face">
+          Initiation
+          <select
+            className="rounded border border-border bg-surface px-1 py-0.5 text-sm"
+            value={value('initiation')}
+            disabled={!ready}
+            onChange={(e) => edit({ initiation: e.currentTarget.value as Initiation })}
+          >
+            {INITIATIONS.map((k) => (
+              <option key={k} value={k}>
+                {INITIATION_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {TIMING_SLIDERS.map((spec) => (
+          <Slider key={spec.key} spec={spec} value={value(spec.key)} disabled={!ready} onChange={(v) => edit({ [spec.key]: v })} />
+        ))}
+        <p className="text-[11px] text-muted">Rock moves toward the holes that fired before it (burden relief).</p>
+      </fieldset>
       {MAIN_SLIDERS.map((spec) => (
         <Slider key={spec.key} spec={spec} value={value(spec.key)} disabled={!ready} onChange={(v) => edit({ [spec.key]: v })} />
       ))}

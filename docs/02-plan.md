@@ -52,7 +52,7 @@
 | P6 | Performance via the **dense demo blast** | `b1040-031` = 80×48×8 bounding grid (30,720 cells), 27,088 blocks inside its outline, served by the API. FPS overlay in dev. Replaces the old client-side "dense toggle". |
 | P7 | README, About modal, Loom | See §7. |
 | **P8** | **API** (ADR-10/11/12) | Next.js route handlers: `GET /api/blasts`, `GET /api/blasts/:id`, `GET /api/blasts/:id/model` (binary), `GET /api/blasts/:id/movement` (binary, CDN-cached), `GET /api/health`. Zod-validated. Codec round-trip and endpoint tests. Blast picker in the panel header. |
-| **P9** | **Blasthole layer** | Instanced cylinders on the burden × spacing pattern, coloured by sampled grade. Visible before the blast, fading out during it. Labelled "illustrative pattern, not used by the movement heuristic". |
+| **P9** | **Blasthole layer** | Instanced cylinders on the burden × spacing pattern, coloured by sampled grade. Visible before the blast, fading out during it. Labelled "illustrative pattern; its firing sequence sets the throw direction" (since the timing-driven movement: holes can also be coloured by firing time). |
 
 **Stretch, ranked by impact ÷ effort**
 | Rank | Feature | Impact | Effort | Why |
@@ -370,7 +370,7 @@ export interface BlastParameters {
   noiseLength: number;        // m, spatial correlation length. 8
   seed: number;               // 42
 }
-// Burden/spacing/powder factor are NOT inputs to the heuristic (see BlastPattern: display only).
+// Burden/spacing shape the firing sequence (timing.ts); powder factor is NOT an input to the heuristic.
 
 export interface Heightfield {
   origin: Vec2; cellSize: number; nx: number; ny: number;

@@ -111,13 +111,27 @@ describe('LayerToggles: blastholes (P9)', () => {
     const box = screen.getByRole('checkbox', { name: /Blastholes/ }) as HTMLInputElement;
     expect(box.checked).toBe(true);
     expect(screen.getByText(HOLES_NOTE)).toBeTruthy();
-    expect(HOLES_NOTE).toBe('illustrative pattern, not used by the movement heuristic');
+    expect(HOLES_NOTE).toBe('illustrative pattern; its firing sequence sets the throw direction');
     expect(box.getAttribute('aria-describedby')).toBe('holes-note');
     fireEvent.click(box);
     expect(appStore.getState().layers.holes).toBe(false);
     expect(box.checked).toBe(false);
     fireEvent.click(box);
     expect(appStore.getState().layers.holes).toBe(true);
+  });
+
+  it('colours the holes by firing time (default, with the firing range) or by sampled grade', () => {
+    render(<LayerToggles />);
+    const timing = screen.getByRole('button', { name: 'Firing time' });
+    const grade = screen.getByRole('button', { name: 'Grade' });
+    expect(appStore.getState().holeColour).toBe('timing');
+    expect(timing.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText(/fired 0–/)).toBeTruthy();
+    fireEvent.click(grade);
+    expect(appStore.getState().holeColour).toBe('grade');
+    expect(screen.getByText('(by sampled grade)')).toBeTruthy();
+    fireEvent.click(timing);
+    expect(appStore.getState().holeColour).toBe('timing');
   });
 
   it('the dig-line toggles are still there', () => {

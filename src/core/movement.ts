@@ -14,8 +14,10 @@
  *    n₁, n₂ = seeded 3D simplex noise at centroid / noiseLength.
  * 2. Swell + re-grid: k = swell^(1/3); post-blast plan grid of cell c′ = c·k from the back of the
  *    box to past the throw; bin each target. Rock can only land on free ground: inside the blast
- *    footprint or on the open floor in front of the face. A target on unblasted rock slides
- *    laterally back toward the block's own strip, then forward along the throw until free.
+ *    footprint or on the (bounded) open floor in front of the face. A cell is valid only if the
+ *    WHOLE swollen block footprint (the cell square) is free, so no settled block overlaps rock
+ *    or the pit terrain's walls. A target on an invalid cell slides laterally back toward the
+ *    block's own strip, then along the throw (forward, else back) to the nearest valid cell.
  * 3. Stacking: per cell, sort by original z (ties: front first), z_n = z_toe + (n + ½)·H_b·k.
  * 4. Angle-of-repose relaxation: move the top block of the tallest offending cell to its lowest
  *    valid neighbour until stable or 20·N moves (see `allowedDrop` for the lattice criterion).
@@ -156,15 +158,13 @@ export function computeMovementDetailed(
   const nCells = nA * nB;
   const lc = (ia: number, ib: number) => ia + nA * ib; // local cell index
 
-  // Free ground: the blast footprint and the open floor in front of the face (cell centre test).
-  // The last column along the throw is always open (it lies past every face).
+  // A cell is valid when its whole square (the swollen block's plan footprint) is free ground.
+  // Every row ib in the footprint's lateral range has valid cells: the open floor in front of the
+  // frontmost face is FLOOR_WIDTH ≫ c′ deep and SIDE_OPEN ≫ c′ wider than the footprint.
   const valid = new Uint8Array(nCells);
   for (let ib = 0; ib < nB; ib++) {
-    const b = (ib - mLat + 0.5) * cell;
-    for (let ia = 0; ia < nA; ia++) {
-      const a = (ia + 0.5) * cell;
-      valid[lc(ia, ib)] = fp.contains(a, b) || fp.isOpen(a, b) ? 1 : 0;
-    }
+    const b0 = (ib - mLat) * cell;
+    for (let ia = 0; ia < nA; ia++) valid[lc(ia, ib)] = fp.boxIsFree(ia * cell, b0, cell) ? 1 : 0;
   }
 
   // ── Step 1: target plan displacement, binning, delay ────────────────────
@@ -209,12 +209,19 @@ export function computeMovementDetailed(
     let ia = Math.floor(ta / cell);
     let ib = Math.floor(tb / cell) + mLat;
     if (!valid[lc(ia, ib)]) {
-      // Target on unblasted rock: slide back toward the block's own strip, then forward along the
-      // throw (its face, and the open floor past it, are ahead). Ends at the always-open last column.
+      // Target not on free ground: slide back toward the block's own strip, then along the throw,
+      // forward first (its face and the open floor are ahead), else back (past the open floor).
       const ib0 = Math.min(nB - 1, Math.max(0, Math.floor(b / cell) + mLat));
       const step = Math.sign(ib0 - ib);
       while (ib !== ib0 && !valid[lc(ia, ib)]) ib += step;
-      while (ia < nA - 1 && !valid[lc(ia, ib)]) ia++;
+      let ja = ia;
+      while (ja < nA - 1 && !valid[lc(ja, ib)]) ja++;
+      if (!valid[lc(ja, ib)]) {
+        ja = ia;
+        while (ja > 0 && !valid[lc(ja, ib)]) ja--;
+      }
+      if (!valid[lc(ja, ib)]) throw new Error(`computeMovement: no free ground in post-grid row ${ib}`);
+      ia = ja;
     }
     cellOf[n] = lc(ia, ib);
 

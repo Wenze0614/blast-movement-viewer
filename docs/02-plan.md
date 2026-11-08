@@ -262,7 +262,7 @@ export interface DataSource {
 ### ADR-11: Data transport (binary, columnar)
 - **Options:** JSON (3–5× bigger, slow `JSON.parse`, boxed numbers); **custom length-prefixed binary SoA**; Apache Arrow IPC; 3D Tiles / tiled glTF.
 - **Choice:** custom binary with a JSON header and a **shared codec** (`core/codec.ts`) used by the server (encode) and the client (decode → typed-array *views*, no copy). Round-trip unit test.
-- **Layout** (little-endian, sections 4-byte aligned, all Float32 before Uint8):
+- **Layout** (little-endian, sections 4-byte aligned; Float32, then Uint32, then Uint8; `schemaVersion` 2 since sparse models, v1 payloads are rejected):
 
   | Section | Type | Length |
   |---|---|---|
@@ -271,10 +271,13 @@ export interface DataSource {
   | header JSON (utf-8, padded) | | `{ schemaVersion, kind, count, grid, grades, fields:[{name,type,offset,length}], … }` |
   | `centroid` | Float32 | 3N |
   | `grade`, `density`, `tonnes` | Float32 | N each |
+  | `cell` (grid cell `i + nx·(j + ny·k)` per block, strictly increasing) | Uint32 | N |
   | `rockType`, `oreClass` | Uint8 | N each |
 
+  N = blocks present (≤ nx·ny·nz: the grid is the bounding box of an irregular blast outline). Decode rejects `cell` values that are not strictly increasing or lie outside the grid (`BAD_DATA`).
+
   Movement payload: `end` (Float32 3N), `delay` (Float32 N), `surface.height` (Float32 nx·ny). The header carries `looseScale`, `postGrid`, the echoed `params` and `paramsHash`.
-- **Size:** 26 B/block → 3,840 blocks ≈ 100 KB, 30,720 ≈ 800 KB, before compression. ⚠️ Check whether Vercel compresses `application/octet-stream`; if not, pre-compress or accept the size.
+- **Size:** 30 B/block → 3,200 blocks ≈ 97 KB, 27,088 ≈ 813 KB, before compression. ⚠️ Check whether Vercel compresses `application/octet-stream`; if not, pre-compress or accept the size.
 - **At scale:** Arrow/Parquet for analytics interop, or **tiled, range-requestable chunks** (per bench/flitch tile + LOD level) streamed into the instanced renderer.
 
 ### ADR-12: Caching, validation and compute placement
@@ -322,11 +325,15 @@ export interface GradeSettings {
   highGrade: number;     // 1.5  (display class split)
 }
 
-/** Storage: struct-of-arrays. Index: id = i + nx * (j + ny * k) */
+/**
+ * Storage: struct-of-arrays over the PRESENT blocks only (sparse: a blast outline selects the
+ * columns). Block id = array index; cell[id] = grid cell i + nx * (j + ny * k), strictly increasing.
+ */
 export interface BlockModel {
-  grid: GridSpec;
+  grid: GridSpec;             // bounding grid: count <= nx * ny * nz
   grades: GradeSettings;
-  count: number;              // 3840
+  count: number;              // 3200 (b1040-017: 3,840 cells, 3,200 inside the outline)
+  cell: Uint32Array;          // count, grid cell index per block
   centroid: Float32Array;     // 3*count, m
   grade: Float32Array;        // g/t Au, e.g. 0.12 .. 6.0
   density: Float32Array;      // t/m³ in situ, e.g. 2.65 waste, 2.75 mineralised

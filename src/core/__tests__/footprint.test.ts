@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { getBlastConfig } from '../blasts';
 import { generateBlockModel } from '../blockModel';
-import { benchFrame, createFootprint, modelColumnMask, outlineColumnMask, type FreeFace } from '../footprint';
+import { benchFrame, createFootprint, FLOOR_WIDTH, modelColumnMask, outlineColumnMask, SIDE_OPEN, type FreeFace } from '../footprint';
 import type { GridSpec } from '../types';
 
 const grid: GridSpec = { origin: [100, 200, 1000], blockSize: [2, 2, 2], nx: 5, ny: 4, nz: 3 };
@@ -84,6 +84,33 @@ describe('createFootprint', () => {
     expect(fp.isOpen(10, 1)).toBe(true);
     expect(fp.isOpen(9.9, 7)).toBe(false); // beside the blast: rock until the frontmost face
     expect(fp.isOpen(10, 7)).toBe(true);
+  });
+
+  it('the open floor is bounded: FLOOR_WIDTH past the frontmost face, SIDE_OPEN beyond the sides', () => {
+    expect([fp.openEnd, fp.openLatMin, fp.openLatMax]).toEqual([10 + FLOOR_WIDTH, -SIDE_OPEN, 6 + SIDE_OPEN]);
+    expect(fp.isOpen(10 + FLOOR_WIDTH - 0.01, 3)).toBe(true);
+    expect(fp.isOpen(10 + FLOOR_WIDTH, 3)).toBe(false);
+    expect(fp.isOpen(20, -SIDE_OPEN)).toBe(true);
+    expect(fp.isOpen(20, -SIDE_OPEN - 0.01)).toBe(false);
+    expect(fp.isOpen(20, 6 + SIDE_OPEN)).toBe(false);
+    expect(fp.isFree(3, 1)).toBe(true); // footprint
+    expect(fp.isFree(20, 1)).toBe(true); // open floor
+    expect(fp.isFree(1, 1)).toBe(false); // rock
+  });
+
+  it('boxIsFree: the whole square must be free ground (a rock column inside a box is found)', () => {
+    expect(fp.boxIsFree(2, 0, 4)).toBe(true); // columns (1..2, 0..1), all present
+    expect(fp.boxIsFree(0, 0, 4)).toBe(false); // includes rock column (0, 0)
+    expect(fp.boxIsFree(6, 4, 2)).toBe(true); // in front of the recessed face: open
+    expect(fp.boxIsFree(5, 4, 2)).toBe(true); // half on column (2, 2), half on the open floor in front of it
+    expect(fp.boxIsFree(9, 5, 2)).toBe(false); // straddles row 2 open and row 3 rock behind the frontmost face
+    expect(fp.boxIsFree(10, 5, 2)).toBe(true);
+    // A single rock column fully inside a larger box is still caught.
+    const holed = new Uint8Array(20).fill(1);
+    holed[2 + 5 * 1] = 0;
+    const h = createFootprint(grid, holed, 'east');
+    expect(h.boxIsFree(3, 1, 4)).toBe(false);
+    expect(h.boxIsFree(6, 0, 4)).toBe(true);
   });
 
   it('an empty mask behaves like an empty rectangular bench', () => {

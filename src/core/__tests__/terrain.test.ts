@@ -7,7 +7,7 @@ import { generateBlockModel } from '../blockModel';
 import { createFootprint, modelColumnMask } from '../footprint';
 import { computeMovement } from '../movement';
 import { BERM_WIDTH, buildPitTerrain, FACE_ANGLE_DEG, FLOOR_WIDTH, type PitTerrain } from '../terrain';
-import type { BlockModel } from '../types';
+import type { BlastParameters, BlockModel } from '../types';
 
 const cfg = getBlastConfig('b1040-017')!;
 const model = generateBlockModel(cfg);
@@ -28,6 +28,49 @@ function heightAt(t: PitTerrain, x: number, y: number): number {
   const h = (i: number, j: number) => t.height[i + t.nx * j];
   return (1 - u) * (1 - v) * h(ix, iy) + u * (1 - v) * h(ix + 1, iy) + (1 - u) * v * h(ix, iy + 1) + u * v * h(ix + 1, iy + 1);
 }
+/** Height of the drawn surface at (x, y): the two triangles per cell packTerrain emits. */
+function surfaceAt(t: PitTerrain, x: number, y: number): number {
+  const fx = (x - t.origin[0]) / t.spacing;
+  const fy = (y - t.origin[1]) / t.spacing;
+  const ix = Math.min(t.nx - 2, Math.max(0, Math.floor(fx)));
+  const iy = Math.min(t.ny - 2, Math.max(0, Math.floor(fy)));
+  const u = fx - ix;
+  const v = fy - iy;
+  const h = (i: number, j: number) => t.height[i + t.nx * j];
+  const h00 = h(ix, iy);
+  const h10 = h(ix + 1, iy);
+  const h01 = h(ix, iy + 1);
+  const h11 = h(ix + 1, iy + 1);
+  return u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + v * (h01 - h00) + u * (h11 - h01);
+}
+
+/**
+ * [min, max] of the drawn surface over a plan box. The surface is piecewise linear, so its extremes
+ * lie at grid vertices inside the box or on the box boundary: both are sampled (boundary every
+ * spacing/16, finer than any triangle edge crossing matters for a 1e-3 m tolerance).
+ */
+function surfaceRange(t: PitTerrain, x0: number, y0: number, x1: number, y1: number): [number, number] {
+  let lo = Infinity;
+  let hi = -Infinity;
+  const take = (h: number) => {
+    lo = Math.min(lo, h);
+    hi = Math.max(hi, h);
+  };
+  for (let iy = Math.ceil((y0 - t.origin[1]) / t.spacing); t.origin[1] + iy * t.spacing <= y1; iy++)
+    for (let ix = Math.ceil((x0 - t.origin[0]) / t.spacing); t.origin[0] + ix * t.spacing <= x1; ix++)
+      take(t.height[ix + t.nx * iy]);
+  const step = t.spacing / 16;
+  for (let x = x0; x <= x1 + 1e-9; x += step) {
+    take(surfaceAt(t, x, y0));
+    take(surfaceAt(t, x, y1));
+  }
+  for (let y = y0; y <= y1 + 1e-9; y += step) {
+    take(surfaceAt(t, x0, y));
+    take(surfaceAt(t, x1, y));
+  }
+  return [lo, hi];
+}
+
 const vertexAt = (t: PitTerrain, x: number, y: number) =>
   Math.round((x - t.origin[0]) / t.spacing) + t.nx * Math.round((y - t.origin[1]) / t.spacing);
 
@@ -98,6 +141,33 @@ describe('buildPitTerrain', () => {
       for (let n = 0; n < m.count; n++) {
         const h = heightAt(t, mv.end[3 * n], mv.end[3 * n + 1]);
         expect(h, `${c.id} block ${n}`).toBeLessThanOrEqual(c.grid.origin[2] + 1e-3);
+      }
+    }
+  });
+
+  const EXTREMES: [string, Partial<BlastParameters>][] = [
+    ['defaults', {}],
+    ['far, loose and flat', { maxThrow: 25, swellFactor: 1.6, reposeAngleDeg: 25, lateralFan: 5, lateralSigma: 5, randomness: 1, backRowRatio: 1, toeRatio: 1 }],
+    ['no throw, no swell, steep', { maxThrow: 0, swellFactor: 1, reposeAngleDeg: 45 }],
+    ['facing north', { freeFace: 'north', maxThrow: 25, swellFactor: 1.6, reposeAngleDeg: 25 }],
+  ];
+
+  it.each(EXTREMES)('every settled block sits on the floor over its whole swollen footprint (%s)', (_name, over) => {
+    for (const c of BLAST_CONFIGS) {
+      const m = generateBlockModel(c);
+      const params = { ...c.defaultParams, ...over };
+      const t = buildPitTerrain(m, params.freeFace);
+      const mv = computeMovement(m, params);
+      const half = (c.grid.blockSize[0] * mv.looseScale) / 2 - 1e-3;
+      const z0 = c.grid.origin[2];
+      for (let n = 0; n < m.count; n++) {
+        const x = mv.end[3 * n];
+        const y = mv.end[3 * n + 1];
+        const [lo, hi] = surfaceRange(t, x - half, y - half, x + half, y + half);
+        // No terrain pokes into the block (hi), and it is not hanging over the bench below (lo).
+        expect(hi, `${c.id} block ${n} at ${x.toFixed(2)},${y.toFixed(2)}`).toBeLessThanOrEqual(z0 + 1e-3);
+        expect(lo, `${c.id} block ${n} at ${x.toFixed(2)},${y.toFixed(2)}`).toBeGreaterThanOrEqual(z0 - 0.16);
+        expect(t.mask[vertexAt(t, x, y)], `${c.id} block ${n} outside the survey`).toBe(1);
       }
     }
   });

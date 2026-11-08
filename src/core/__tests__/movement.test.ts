@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { getBlastConfig } from '../blasts';
 import { blockIdAt, blockModelConfigHash, generateBlockModel, type BlockModelConfig } from '../blockModel';
 import { DEFAULT_BLAST_PARAMETERS } from '../defaults';
+import { FLOOR_WIDTH, SIDE_OPEN } from '../footprint';
 import { canonicalParams } from '../hash';
 import type { LensFeature } from '../orebody';
 import {
@@ -342,7 +343,7 @@ describe('computeMovement: irregular footprints', () => {
     }
   });
 
-  it('free ground = the blast footprint + the open floor in front of each strip\'s face', () => {
+  it('free ground = the blast footprint + the bounded open floor in front of each strip\'s face', () => {
     const { model, result, stats } = r022;
     const g = result.postGrid;
     // b1030-022 is an L: the back-left corner (x < 50, y > 40) is unblasted bench rock.
@@ -356,7 +357,11 @@ describe('computeMovement: irregular footprints', () => {
           expect(valid, `${x},${y}`).toBe(0);
           rock++;
         }
-        if (x > 101) expect(valid, `${x},${y} past the face`).toBe(1);
+        const h = g.cellSize / 2;
+        // The open floor: a bay FLOOR_WIDTH deep in front of the face, SIDE_OPEN wider each side.
+        if (x - h >= 100 && x + h <= 100 + FLOOR_WIDTH && y - h >= -SIDE_OPEN && y + h <= 60 + SIDE_OPEN)
+          expect(valid, `${x},${y} on the open floor`).toBe(1);
+        if (x + h > 100 + FLOOR_WIDTH || y - h < -SIDE_OPEN || y + h > 60 + SIDE_OPEN) expect(valid, `${x},${y} past the bay`).toBe(0);
         if (x < 99 && (y < 0 || y > 60)) expect(valid, `${x},${y} beside the blast`).toBe(0);
       }
     expect(rock).toBeGreaterThan(20);

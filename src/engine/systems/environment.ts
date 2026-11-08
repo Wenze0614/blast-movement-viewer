@@ -13,6 +13,9 @@ import terrainVert from '../shaders/terrain.vert.glsl';
 import type { SystemFactory } from '../types';
 import { packTerrain } from './terrainGeometry';
 
+/** Scene name of the terrain mesh (the picking system occludes blocks behind it). */
+export const TERRAIN_MESH_NAME = 'terrain';
+
 export const createEnvironmentSystem: SystemFactory = (ctx) => {
   const { store, scene, bag } = ctx;
   const group = new THREE.Group();
@@ -49,7 +52,7 @@ export const createEnvironmentSystem: SystemFactory = (ctx) => {
       geometry.setIndex(new THREE.BufferAttribute(arrays.index, 1));
       geometry.computeBoundingSphere();
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = 'terrain';
+      mesh.name = TERRAIN_MESH_NAME;
       mesh.matrixAutoUpdate = false;
       group.add(mesh);
     }

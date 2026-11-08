@@ -14,6 +14,7 @@ import blocksFrag from '../shaders/blocks.frag.glsl';
 import blocksVert from '../shaders/blocks.vert.glsl';
 import { registerSystems } from '../systems';
 import { createBlocksSystem } from '../systems/blocks';
+import { createEnvironmentSystem } from '../systems/environment';
 import { CLICK_SLOP_PX, createPickingSystem } from '../systems/picking';
 import type { EngineContext } from '../types';
 
@@ -187,6 +188,31 @@ describe('picking system (P2)', () => {
     ctx.store.getState().setOreOnly(false);
     click(ctx);
     expect(ctx.store.getState().selection).toBe(col!.id);
+  });
+
+  it('terrain occludes: a block hidden behind the pit terrain is not picked; a visible one still is (Codex review)', async () => {
+    const ctx = mockCtx();
+    const env = createEnvironmentSystem(ctx, {});
+    await env.init?.();
+    createPickingSystem(ctx, {});
+    ctx.store.getState().setModel(model, 'local');
+    // Low view from the south, below the crest of the bench rock south of the blast: the ray hits
+    // the terrain (≈ 68 m) before any block (the first block behind it is ≈ 76 m away).
+    ctx.camera.position.set(50, -70, 1050);
+    ctx.camera.lookAt(50, 30, 1035);
+    ctx.camera.updateProjectionMatrix();
+    ctx.camera.updateMatrixWorld();
+    const terrain = ctx.scene.getObjectByName('terrain') as THREE.Mesh;
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(0, 0), ctx.camera);
+    expect(ray.intersectObject(terrain, false)[0]?.distance).toBeLessThan(75);
+    click(ctx);
+    expect(ctx.store.getState().selection).toBeNull();
+    // Looking straight down at a top block: nothing in front of it, so it is picked.
+    const b = topBlock(12, 7);
+    lookDownAt(ctx, b.x, b.y);
+    click(ctx);
+    expect(ctx.store.getState().selection).toBe(b.id);
   });
 
   it('dispose removes the listeners', () => {

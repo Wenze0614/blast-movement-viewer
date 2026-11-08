@@ -11,11 +11,21 @@
  * the ground is open (the floor left by the previous cut); outside the footprint and behind the
  * face it is unblasted rock. Strips with no blocks (beside the blast) take the frontmost face of
  * the whole blast, so the open floor continues past the blast's sides.
+ *
+ * The open floor is bounded: it reaches `FLOOR_WIDTH` m past the frontmost face (where the pit
+ * terrain steps down to the bench below) and `SIDE_OPEN` m beyond the blast's sides. Movement may
+ * land rock only on free ground (footprint ∪ open floor) and the terrain is floor over all of it,
+ * so a settled block always rests on drawn floor.
  */
 import { pointInRing } from './geometry';
 import type { BlastParameters, BlockModel, GridSpec, Vec2 } from './types';
 
 export type FreeFace = BlastParameters['freeFace'];
+
+/** m of open floor in front of the frontmost face, before the drop to the bench below. */
+export const FLOOR_WIDTH = 45;
+/** m the open floor extends beyond the footprint's sides (the width of the previous cut). */
+export const SIDE_OPEN = 30;
 
 export interface BenchFrame {
   /** m, bounding-box length along the throw and width across it. */
@@ -108,12 +118,24 @@ export interface Footprint {
   backMin: number;
   latMin: number;
   latMax: number;
+  /** m: the open floor ends at a = openEnd (frontMax + FLOOR_WIDTH) and spans b ∈ [openLatMin, openLatMax). */
+  openEnd: number;
+  openLatMin: number;
+  openLatMax: number;
   /** Is the bench-local point inside a present block column? */
   contains(a: number, b: number): boolean;
   /** m along the throw: where the free face is for lateral position b. */
   faceLine(b: number): number;
-  /** In front of the free face (open floor)? */
+  /** On the open floor: in front of the free face, within its bounds? */
   isOpen(a: number, b: number): boolean;
+  /** Free ground (rock may land here): inside the footprint or on the open floor. */
+  isFree(a: number, b: number): boolean;
+  /**
+   * Is the whole square [a0, a0 + size] × [b0, b0 + size] free ground? Sampled on a lattice finer
+   * than half a block (free ground is a union of block-column squares and an axis-aligned strip
+   * region, so no rock column can hide between samples), inset by a hair so shared edges count.
+   */
+  boxIsFree(a0: number, b0: number, size: number): boolean;
 }
 
 export function createFootprint(grid: GridSpec, columns: Uint8Array, face: FreeFace): Footprint {
@@ -153,17 +175,39 @@ export function createFootprint(grid: GridSpec, columns: Uint8Array, face: FreeF
     const f = bi >= 0 && bi < nLat ? front[bi] : NaN;
     return Number.isNaN(f) ? frontMax : f;
   };
+  const latMin = latLo * cb;
+  const latMax = (latHi + 1) * cb;
+  const openEnd = frontMax + FLOOR_WIDTH;
+  const openLatMin = latMin - SIDE_OPEN;
+  const openLatMax = latMax + SIDE_OPEN;
+  const isOpen = (a: number, b: number) => a >= faceLine(b) && a < openEnd && b >= openLatMin && b < openLatMax;
+  const isFree = (a: number, b: number) => contains(a, b) || isOpen(a, b);
+  const step = Math.min(ca, cb) / 2;
+  const boxIsFree = (a0: number, b0: number, size: number) => {
+    const inset = 1e-6 * size;
+    const n = Math.max(1, Math.ceil(size / step));
+    for (let u = 0; u <= n; u++) {
+      const a = a0 + inset + ((size - 2 * inset) * u) / n;
+      for (let v = 0; v <= n; v++) if (!isFree(a, b0 + inset + ((size - 2 * inset) * v) / n)) return false;
+    }
+    return true;
+  };
   return {
     frame,
     columns,
     front,
     frontMax,
     backMin,
-    latMin: latLo * cb,
-    latMax: (latHi + 1) * cb,
+    latMin,
+    latMax,
+    openEnd,
+    openLatMin,
+    openLatMax,
     contains,
     faceLine,
-    isOpen: (a, b) => a >= faceLine(b),
+    isOpen,
+    isFree,
+    boxIsFree,
   };
 }
 

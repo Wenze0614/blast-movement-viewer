@@ -80,6 +80,14 @@ describe('scripts/codex-review.sh', () => {
     expect(run({ output: '' }).code).toBe(2);
   });
 
+  it('only a CRLF ending is tolerated: indented examples and embedded CRs are "no verdict" (round 2)', () => {
+    expect(run({ output: 'Example of the format:\n\n    VERDICT: PASS\n' }).code).toBe(2);
+    expect(run({ output: 'Example:\n\tVERDICT: PASS\n' }).code).toBe(2);
+    expect(run({ output: 'VER\rDICT: PASS\n' }).code).toBe(2);
+    expect(run({ output: 'VERDICT: PASS \n' }).code).toBe(2);
+    expect(run({ output: 'done\r\nVERDICT: CHANGES REQUESTED\r\n' }).code).toBe(1);
+  });
+
   it('builds the prompt from the repo prompt, and a follow-up round includes the previous findings', () => {
     const first = run({ output: 'VERDICT: PASS\n' });
     expect(first.prompt).toContain('git diff origin/main...HEAD');

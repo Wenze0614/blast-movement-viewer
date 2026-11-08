@@ -6,8 +6,10 @@
 # Runs Codex read-only on `git diff origin/main...HEAD`. With a previous round's output, asks
 # Codex to verify each earlier finding first. The review ends with one line:
 #   VERDICT: PASS   or   VERDICT: CHANGES REQUESTED
-# The verdict is the LAST non-blank line of this run's output, matched exactly; anything else
-# (a Codex error, no output, a verdict quoted in prose, text after the verdict) is "no verdict".
+# The verdict is the LAST non-blank line of this run's output, matched exactly (only a CRLF line
+# ending is tolerated); anything else
+# (a Codex error, no output, a verdict quoted in prose or indented as an example, text after the
+# verdict) is "no verdict".
 # Exit code: 0 = PASS, 1 = CHANGES REQUESTED, 2 = no verdict / Codex error.
 #
 # CODEX_MODEL overrides the model (default gpt-6.1-sol; some ChatGPT plans reject others).
@@ -46,7 +48,9 @@ if ! codex exec -m "$model" -C "$root" -s read-only --ephemeral -o "$out" - < "$
   exit 2
 fi
 
-last=$(grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n 1 | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
+# Verbatim apart from a CRLF line ending: no trimming, so an indented example never counts.
+last=$(grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n 1 || true)
+last=${last%$'\r'}
 case "$last" in
   'VERDICT: PASS') echo "$last"; exit 0 ;;
   'VERDICT: CHANGES REQUESTED') echo "$last"; exit 1 ;;

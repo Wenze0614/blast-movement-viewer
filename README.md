@@ -37,6 +37,11 @@ Media to capture in a browser (not yet recorded); add the image links once the f
   waste) under each reconciliation scenario. Picking is a CPU ray–box test on the same easing as
   the shader, so it hits what is on screen at any scrub position and skips blocks hidden by the
   section or ore-only. Esc or × closes it.
+- **Plan view.** The **Plan** button eases the camera to a top-down, north-up view of the bench
+  and muckpile (rotation locked, drag to pan); **3D** returns to where you were.
+- **Frame stats.** The **FPS** button shows fps, draw calls, triangles and block count, published
+  about twice a second (on by default in development; add `?fps` to the URL in production).
+  Rendering is on demand, so when nothing moves it says *idle*.
 - **Section and ore-only.** A section plane through the bench (the cut face shows ore pushed under
   waste) and a toggle that hides waste blocks.
 - **Reconciliation table.** Mill tonnes, mill grade, ore loss %, dilution %, ounces to the mill and
@@ -97,7 +102,7 @@ npm run build && npm run start   # production build
   phase (`input → simulate → animate → render`), updates from a clamped `dt`, and has a mandatory
   `dispose()`; every GPU resource goes into a `DisposeBag`. React StrictMode stays on, and a
   mount → unmount → mount cycle returns renderer memory to baseline. Current order: controls →
-  picking → playback → blocks → holes → dig lines → environment → render.
+  picking → playback → blocks → holes → dig lines → environment → render → perf.
 - **Owned `ShaderMaterial` with GPU interpolation.** The blocks are one `InstancedBufferGeometry`
   (unit box) with `aStart`, `aEnd`, `aDelay` and `aColor`. The vertex shader eases each block from
   start to end with a throw arc and the swell scale, so scrubbing costs **one uniform write per
@@ -235,8 +240,12 @@ Reconciliation runs on the client: it is cheap and has to follow every parameter
 - **Draw calls:** one per layer. The blocks are **one** draw call at any block count and the holes
   one, plus the floor, the grid and the two dig lines.
 - **Per-frame CPU while scrubbing or playing:** the `uProgress` and `uOpacity` uniform writes.
-- Browser frame rates have not been measured in this repo yet (see the manual checklist in the
-  Stage 5 PR).
+- **Frame rate:** measured with the FPS overlay during playback in the development test browser
+  (an embedded Chromium pane on an Apple M4 Pro, 581 × 859 px at DPR 1, whose
+  `requestAnimationFrame` is capped at about 50 Hz even on an idle page): **both the 3,840-block
+  and the 30,720-block (370k triangles) blasts ran at that cap**, 5 draw calls each. That shows
+  the engine keeps up with the display, not its ceiling; press **FPS** to measure on your own
+  machine and display.
 
 ## Scaling to real block models (millions of blocks)
 

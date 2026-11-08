@@ -10,10 +10,24 @@ import { createDataSource, isAbortError, type DataSource } from '@/data';
 import { createEngine } from '@/engine/Engine';
 import type { Engine } from '@/engine/types';
 import { startDataPipeline } from '@/state/pipeline';
+import { useAppStore } from '@/state/hooks';
 import { appStore } from '@/state/store';
 import Inspector from '@/ui/Inspector';
+import ViewportControls from '@/ui/ViewportControls';
 
 let sharedDataSource: DataSource | null = null;
+let perfDefaultApplied = false;
+
+/**
+ * P6: frame stats start on in development, or with `?fps` in the URL; the FPS button toggles them.
+ * Applied once per page, so a StrictMode remount doesn't undo the user's toggle.
+ */
+function applyPerfDefault(): void {
+  if (perfDefaultApplied) return;
+  perfDefaultApplied = true;
+  const fromUrl = new URLSearchParams(window.location.search).has('fps');
+  if (process.env.NODE_ENV !== 'production' || fromUrl) appStore.getState().setShowPerf(true);
+}
 /**
  * One DataSource per page (both sources cache models). An API failure falls back to local compute
  * and flags it in the store for the source badge.
@@ -28,10 +42,12 @@ function dataSource(): DataSource {
 export default function Viewer() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const plan = useAppStore((s) => s.cameraView === 'plan');
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    applyPerfDefault();
     const data = dataSource();
     const pipeline = startDataPipeline(appStore, data);
     const ctrl = new AbortController();
@@ -69,8 +85,12 @@ export default function Viewer() {
           <div className="pointer-events-none absolute top-3 left-3">
             <Inspector />
           </div>
+          <div className="pointer-events-none absolute right-3 bottom-2">
+            <ViewportControls />
+          </div>
           <p className="pointer-events-none absolute bottom-2 left-3 text-[11px] text-white/45">
-            Drag to orbit · right-drag to pan · scroll to zoom · click a block to inspect
+            {plan ? 'Plan view · drag to pan' : 'Drag to orbit · right-drag to pan'} · scroll to zoom · click a block to
+            inspect
           </p>
         </>
       )}

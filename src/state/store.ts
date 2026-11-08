@@ -40,6 +40,19 @@ export interface SectionState {
   axis: 'x' | 'y';
 }
 
+/** P6 frame statistics, published by the engine's perf system about twice a second. */
+export interface PerfStats {
+  /** Frames per second over the last window of ACTIVE frames (render on demand). */
+  fps: number;
+  /** ms, mean interval between those frames. */
+  frameMs: number;
+  /** false when no frame ran in the last window (idle: nothing is redrawn). */
+  active: boolean;
+  /** renderer.info.render of the last frame drawn. */
+  drawCalls: number;
+  triangles: number;
+}
+
 export interface DigPolygons {
   original: DigPolygon;
   adjusted: DigPolygon;
@@ -83,6 +96,10 @@ export interface AppState {
   /** Selected block id, or null. */
   selection: number | null;
   cameraView: '3d' | 'plan';
+  /** P6: show the frame-stats overlay (and let the engine publish `perf`). */
+  showPerf: boolean;
+  /** Latest frame statistics while `showPerf`; null before the first sample. */
+  perf: PerfStats | null;
 
   // ── Playback (continuous: engine reads with getState() each frame) ───────
   /** 0 = in situ, 1 = settled muckpile. */
@@ -120,6 +137,8 @@ export interface AppActions {
   setSection(patch: Partial<SectionState>): void;
   select(blockId: number | null): void;
   setCameraView(view: AppState['cameraView']): void;
+  setShowPerf(show: boolean): void;
+  setPerf(perf: PerfStats | null): void;
 
   /** Clamped to [0, 1]. Called by the scrubber, and by the playback system while playing. */
   setProgress(progress: number): void;
@@ -157,6 +176,8 @@ export function initialAppState(): AppState {
     section: { enabled: false, position: 0, axis: 'y' },
     selection: null,
     cameraView: '3d',
+    showPerf: false,
+    perf: null,
     progress: 0,
     playing: false,
     duration: 2.5,
@@ -261,6 +282,8 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       setSection: (patch) => set({ section: { ...get().section, ...patch } }),
       select: (selection) => set({ selection }),
       setCameraView: (cameraView) => set({ cameraView }),
+      setShowPerf: (showPerf) => set(showPerf ? { showPerf } : { showPerf, perf: null }),
+      setPerf: (perf) => set({ perf }),
 
       setProgress: (progress) => set({ progress: clamp01(progress) }),
       play: () => set({ playing: true, progress: get().progress >= 1 ? 0 : get().progress }),

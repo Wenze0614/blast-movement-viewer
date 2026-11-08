@@ -6,7 +6,8 @@
  * P1 colour modes: a "colour key" names everything the colours depend on for the active mode
  * (grade: model; outcome: polygons + scenario; movement: movement). aColor is rewritten only when
  * the key changes, so scrubbing never repaints except once in outcome mode as the blast starts
- * (in-situ view → post-blast view, state/views.ts). P3 section / ore-only are uniforms.
+ * (in-situ view → post-blast view, state/views.ts). P3 section / ore-only and the P2 selection
+ * highlight are uniforms.
  */
 import * as THREE from 'three';
 import { GRADE_PALETTE, OUTCOME_PALETTE, viridisSrgb } from '@/state/palette';
@@ -141,6 +142,11 @@ export const createBlocksSystem: SystemFactory = (ctx) => {
     uniforms.uOreOnly.value = store.getState().oreOnly ? 1 : 0;
     ctx.invalidate();
   };
+  // P2: one uniform; no buffer is touched, so selection never interacts with the colour key.
+  const applySelection = () => {
+    uniforms.uSelected.value = store.getState().selection ?? -1;
+    ctx.invalidate();
+  };
 
   const unsubData = store.subscribe(
     (s) => [s.model, s.movement] as const,
@@ -153,7 +159,10 @@ export const createBlocksSystem: SystemFactory = (ctx) => {
   const unsubProgress = store.subscribe((s) => s.progress, () => ctx.invalidate());
   const unsubSection = store.subscribe((s) => s.section, applySection);
   const unsubOreOnly = store.subscribe((s) => s.oreOnly, applyOreOnly);
-  for (const unsub of [unsubData, unsubColour, unsubProgress, unsubSection, unsubOreOnly]) bag.track(unsub);
+  const unsubSelection = store.subscribe((s) => s.selection, applySelection);
+  for (const unsub of [unsubData, unsubColour, unsubProgress, unsubSection, unsubOreOnly, unsubSelection]) {
+    bag.track(unsub);
+  }
 
   return {
     name: 'blocks',
@@ -162,6 +171,7 @@ export const createBlocksSystem: SystemFactory = (ctx) => {
       rebuild();
       applySection();
       applyOreOnly();
+      applySelection();
     },
     update() {
       // M4: the only per-frame CPU work for the blocks.

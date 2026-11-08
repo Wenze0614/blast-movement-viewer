@@ -6,6 +6,9 @@
  * P3: section + ore-only hide WHOLE blocks (tested on the animated centroid, so it works at any
  * scrub progress). vHidden is the same for every vertex of an instance and the fragment shader
  * discards on it: the cut face is made of the blocks' own lit faces, never hollow box interiors.
+ *
+ * P2: vSelected = 1 for the instance whose gl_InstanceID equals uSelected (WebGL2 / GLSL ES 3.00;
+ * ids up to 2^24 are exact in a float).
  */
 import ease from './chunks/ease.glsl';
 
@@ -17,6 +20,7 @@ uniform vec3 uBlockSize;
 uniform float uScaleEnd;
 uniform vec4 uSection;
 uniform float uOreOnly;
+uniform float uSelected;
 
 attribute vec3 aStart;
 attribute vec3 aEnd;
@@ -28,6 +32,7 @@ varying vec3 vColor;
 varying vec3 vNormal;
 varying vec3 vLocal;
 varying float vHidden;
+varying float vSelected;
 
 ${ease}
 
@@ -39,6 +44,7 @@ void main() {
   float cut = dot(uSection.xyz, p) < uSection.w ? 1.0 : 0.0;
   vHidden = max(cut, uOreOnly * (1.0 - aOre));
 
+  vSelected = abs(float(gl_InstanceID) - uSelected) < 0.5 ? 1.0 : 0.0;
   vColor = aColor;
   vNormal = normal;   // boxes never rotate: object normal = world normal
   vLocal = position;

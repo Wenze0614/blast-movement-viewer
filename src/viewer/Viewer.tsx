@@ -11,6 +11,7 @@ import { createEngine } from '@/engine/Engine';
 import type { Engine } from '@/engine/types';
 import { startDataPipeline } from '@/state/pipeline';
 import { appStore } from '@/state/store';
+import Inspector from '@/ui/Inspector';
 
 let sharedDataSource: DataSource | null = null;
 /**
@@ -64,9 +65,14 @@ export default function Viewer() {
           The 3D view could not start (WebGL2 required): {error}
         </p>
       ) : (
-        <p className="pointer-events-none absolute bottom-2 left-3 text-[11px] text-white/45">
-          Drag to orbit · right-drag to pan · scroll to zoom
-        </p>
+        <>
+          <div className="pointer-events-none absolute top-3 left-3">
+            <Inspector />
+          </div>
+          <p className="pointer-events-none absolute bottom-2 left-3 text-[11px] text-white/45">
+            Drag to orbit · right-drag to pan · scroll to zoom · click a block to inspect
+          </p>
+        </>
       )}
     </div>
   );

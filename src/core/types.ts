@@ -61,6 +61,12 @@ export interface BlockModel {
   /** OreClass per block: pre-blast classification by grade. */
   oreClass: Uint8Array;
   seed: number;
+  /**
+   * Canonical hash of EVERYTHING that determined this model (grid, grades, ore body definition,
+   * seed, generator version), as 16 hex chars. Part of the movement cache key (ADR-12), so a
+   * changed ore body never reuses a cached movement result. Travels with the model (codec header).
+   */
+  configHash: string;
 }
 
 /** Logical view of one block (inspector, export). Built on demand. */
@@ -204,8 +210,10 @@ export interface ReconciliationResult {
   oreLossPct: number;
   /** wasteToMill.t / mill.t * 100 */
   dilutionPct: number;
-  /** mill.metal / totalOre.metal * 100 */
+  /** mill.metal / totalOre.metal * 100. Can exceed 100 %: mill metal includes metal in dilution waste. */
   metalToMillPct: number;
+  /** oreToMill.metal / totalOre.metal * 100: share of the ore's metal recovered to the mill (≤ 100 %). */
+  oreMetalRecoveryPct: number;
 }
 
 /**

@@ -27,6 +27,13 @@ export interface BlocksUniforms {
   uSection: THREE.IUniform<THREE.Vector4>;
   /** P3: 1 hides blocks whose aOre is 0 (waste), 0 shows all. */
   uOreOnly: THREE.IUniform<number>;
+  /**
+   * P2: instance id of the selected block (compared with gl_InstanceID), −1 = none. A uniform,
+   * not an aColor rewrite: selection never touches buffers or fights a colour-mode repaint.
+   */
+  uSelected: THREE.IUniform<number>;
+  /** Linear RGB tint of the selected block. */
+  uSelectColor: THREE.IUniform<THREE.Color>;
   uLightDir: THREE.IUniform<THREE.Vector3>;
   /** Linear RGB. */
   uSkyColor: THREE.IUniform<THREE.Color>;
@@ -44,6 +51,8 @@ export function createBlocksUniforms(): BlocksUniforms {
     uScaleEnd: { value: 1 },
     uSection: { value: new THREE.Vector4(0, 0, 0, -1) },
     uOreOnly: { value: 0 },
+    uSelected: { value: -1 },
+    uSelectColor: { value: new THREE.Color(1, 1, 1) },
     ...createLightingUniforms(),
     uEdgeDarkening: { value: 0.4 },
   };

@@ -20,12 +20,18 @@ export type { ApiDataSourceOptions } from './api';
 
 export type DataSourceKind = 'api' | 'local';
 
+/**
+ * Download progress of one payload: bytes received so far and the payload's size (`null` when the
+ * server did not say). Sources that do not download (local compute) never call it.
+ */
+export type ProgressListener = (loaded: number, total: number | null) => void;
+
 export interface DataSource {
   readonly kind: DataSourceKind;
   listBlasts(): Promise<BlastSummary[]>;
   getBlast(id: string): Promise<BlastDetail>;
-  getModel(id: string, signal?: AbortSignal): Promise<BlockModel>;
-  getMovement(id: string, params: BlastParameters, signal?: AbortSignal): Promise<MovementResult>;
+  getModel(id: string, signal?: AbortSignal, onProgress?: ProgressListener): Promise<BlockModel>;
+  getMovement(id: string, params: BlastParameters, signal?: AbortSignal, onProgress?: ProgressListener): Promise<MovementResult>;
 }
 
 export interface CreateDataSourceOptions {

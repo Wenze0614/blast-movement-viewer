@@ -11,7 +11,7 @@ import { completeParams } from '@/core/params';
 import { CodecError, decodeModel, decodeMovement } from '@/core/codec';
 import { canonicalParamsString } from '@/core/hash';
 import type { BlastParameters, BlockModel, MovementResult } from '@/core/types';
-import type { DataSource, DataSourceKind } from './index';
+import type { DataSource, DataSourceKind, ProgressListener } from './index';
 import { isAbortError, LocalDataSource } from './local';
 
 /** A non-2xx API response. `code` comes from the typed ApiError body when there is one. */
@@ -64,12 +64,36 @@ export function movementPath(id: string, params: BlastParameters): string {
  * so they are inflated here; an uncompressed payload (a test double, another server) passes
  * through. Detected by the gzip magic bytes 1f 8b (a BMV1 payload starts with "BMV1").
  */
-export async function readPayload(res: Response): Promise<ArrayBuffer> {
-  const buf = await res.arrayBuffer();
+export async function readPayload(res: Response, onProgress?: ProgressListener): Promise<ArrayBuffer> {
+  const buf = onProgress && res.body ? await readWithProgress(res, onProgress) : await res.arrayBuffer();
   const head = new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
   if (head.length < 2 || head[0] !== 0x1f || head[1] !== 0x8b) return buf;
   const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
   return new Response(stream).arrayBuffer();
+}
+
+/** The body's bytes, reporting progress per chunk against the X-Payload-Bytes size. */
+async function readWithProgress(res: Response, onProgress: ProgressListener): Promise<ArrayBuffer> {
+  const header = Number(res.headers.get('x-payload-bytes') ?? res.headers.get('content-length'));
+  const total = Number.isFinite(header) && header > 0 ? header : null;
+  const reader = res.body!.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  onProgress(0, total);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.byteLength;
+    onProgress(loaded, total);
+  }
+  const out = new Uint8Array(loaded);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.byteLength;
+  }
+  return out.buffer;
 }
 
 export class ApiDataSource implements DataSource {
@@ -127,22 +151,22 @@ export class ApiDataSource implements DataSource {
    * Resolved models are cached (deterministic per data version); in-flight fetches are not shared,
    * so one caller's abort never rejects another caller's request.
    */
-  async getModel(id: string, signal?: AbortSignal): Promise<BlockModel> {
+  async getModel(id: string, signal?: AbortSignal, onProgress?: ProgressListener): Promise<BlockModel> {
     const cached = this.models.get(id);
     if (cached) {
       signal?.throwIfAborted();
       return cached;
     }
     const res = await this.request(modelPath(id), signal);
-    const model = decodeModel(await readPayload(res));
+    const model = decodeModel(await readPayload(res, onProgress));
     this.models.set(id, model);
     return model;
   }
 
-  async getMovement(id: string, params: BlastParameters, signal?: AbortSignal): Promise<MovementResult> {
+  async getMovement(id: string, params: BlastParameters, signal?: AbortSignal, onProgress?: ProgressListener): Promise<MovementResult> {
     try {
       const [model, res] = await Promise.all([this.getModel(id, signal), this.request(movementPath(id, params), signal)]);
-      return decodeMovement(await readPayload(res), model);
+      return decodeMovement(await readPayload(res, onProgress), model);
     } catch (err) {
       // The server's data changed under our cached model (a payload for another model, or our
       // `?v=` is no longer current): drop it so the next getModel refetches.
@@ -193,11 +217,11 @@ export class FallbackDataSource implements DataSource {
     return this.run((ds) => ds.getBlast(id));
   }
 
-  getModel(id: string, signal?: AbortSignal): Promise<BlockModel> {
-    return this.run((ds) => ds.getModel(id, signal), signal, true);
+  getModel(id: string, signal?: AbortSignal, onProgress?: ProgressListener): Promise<BlockModel> {
+    return this.run((ds) => ds.getModel(id, signal, onProgress), signal, true);
   }
 
-  getMovement(id: string, params: BlastParameters, signal?: AbortSignal): Promise<MovementResult> {
-    return this.run((ds) => ds.getMovement(id, params, signal), signal, true);
+  getMovement(id: string, params: BlastParameters, signal?: AbortSignal, onProgress?: ProgressListener): Promise<MovementResult> {
+    return this.run((ds) => ds.getMovement(id, params, signal, onProgress), signal, true);
   }
 }

@@ -44,9 +44,9 @@ import { blockModelConfigHash } from '@/core/blockModel';
 import { buildBlastDetail, generateHoles } from '@/core/holes';
 import { isMovementFor } from '@/core/movement';
 import type { BlockModel, GradeSettings } from '@/core/types';
-import { isAbortError, LocalDataSource, type DataSource, type DataSourceKind } from '@/data';
+import { isAbortError, LocalDataSource, type DataSource, type DataSourceKind, type ProgressListener } from '@/data';
 import { attachDerive } from './derive';
-import { modelUpdate, type AppState, type AppStore } from './store';
+import { modelUpdate, type AppState, type AppStore, type LoadProgress } from './store';
 
 export interface DataPipeline {
   /** Resolves when the current blast (or movement) load has settled. Useful in tests. */
@@ -173,8 +173,27 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
     return true;
   }
 
-  /** `resync`: may this load reload the model once if the movement doesn't belong to it? */
-  async function loadMovement(resync = true): Promise<void> {
+  /**
+   * A ProgressListener that writes `store.loadProgress` while its load is current. Throttled to
+   * one store write per 50 ms within a download (the first and last bytes always land).
+   */
+  function progressFor(step: LoadProgress['step'], withModel: boolean, isCurrent: () => boolean): ProgressListener {
+    let last = -Infinity;
+    return (loaded, total) => {
+      if (!isCurrent()) return;
+      const t = now();
+      const edge = loaded === 0 || (total !== null && loaded >= total);
+      if (!edge && t - last < 50) return;
+      last = t;
+      store.getState().setLoadProgress({ step, withModel, loaded, total });
+    };
+  }
+
+  /**
+   * `resync`: may this load reload the model once if the movement doesn't belong to it?
+   * `afterModel`: part of a blast load that just fetched the model (progress shows both steps).
+   */
+  async function loadMovement(resync = true, afterModel = false): Promise<void> {
     const { model, blastId, params } = store.getState();
     if (!model) return;
     movementCtrl?.abort();
@@ -184,9 +203,10 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
       return !ctrl.signal.aborted && !disposed && s.blastId === blastId && s.model === model && s.params === params;
     };
     store.getState().setStatus('loading');
+    store.getState().setLoadProgress({ step: 'movement', withModel: afterModel, loaded: 0, total: null });
     const t0 = now();
     try {
-      const movement = await data.getMovement(blastId, params, ctrl.signal);
+      const movement = await data.getMovement(blastId, params, ctrl.signal, progressFor('movement', afterModel, isCurrent));
       if (!isCurrent()) return;
       if (!isMovementFor(movement, model, params)) {
         const detail = `movement ${movement.paramsHash} (${movement.delay.length} blocks, ${data.kind}) does not belong to model ${model.configHash} (${model.count} blocks) with the current params`;
@@ -199,7 +219,7 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
         const fresh = await data.getModel(blastId, ctrl.signal);
         if (!isCurrent()) return;
         if (fresh !== model && !(await applyModel(blastId, fresh, data.kind, isCurrent))) return;
-        return await loadMovement(false);
+        return await loadMovement(false, afterModel);
       }
       store.getState().setMovement(movement, data.kind, now() - t0);
     } catch (err) {
@@ -250,14 +270,15 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
     const ctrl = (blastCtrl = new AbortController());
     const isCurrent = () => !ctrl.signal.aborted && !disposed && store.getState().blastId === id;
     store.getState().setStatus('loading');
+    store.getState().setLoadProgress({ step: 'model', withModel: true, loaded: 0, total: null });
     try {
       const detail = await data.getBlast(id);
       if (!isCurrent()) return;
       store.getState().setBlast(detail);
-      const model = await data.getModel(id, ctrl.signal);
+      const model = await data.getModel(id, ctrl.signal, progressFor('model', true, isCurrent));
       if (!isCurrent()) return;
       if (!(await applyModel(id, model, data.kind, isCurrent))) return;
-      await loadMovement(); // reports its own errors, guarded by its own staleness check
+      await loadMovement(true, true); // reports its own errors, guarded by its own staleness check
     } catch (err) {
       fail(err, isCurrent);
     }

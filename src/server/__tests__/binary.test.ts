@@ -19,6 +19,7 @@ describe('binary()', () => {
     expect(res.headers.get('content-type')).toBe(BINARY_TYPE);
     expect(res.headers.get('content-length')).toBe(String(body.byteLength));
     expect(res.headers.get('etag')).toBe('"abc"');
+    expect(res.headers.get('x-payload-bytes')).toBe(String(body.byteLength));
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(body);
   });
 
@@ -26,6 +27,7 @@ describe('binary()', () => {
     const body = bytes(STREAM_OVER_BYTES + 2_500_000) as Uint8Array<ArrayBuffer>; // incompressible stand-in
     const res = binary(body, { cacheControl: CACHE.immutable, etag: 'big' });
     expect(res.headers.get('content-length')).toBeNull();
+    expect(res.headers.get('x-payload-bytes')).toBe(String(body.byteLength)); // the client's progress total
     expect(res.headers.get('cache-control')).toBe(CACHE.immutable);
     const reader = res.body!.getReader();
     const parts: Uint8Array[] = [];

@@ -9,7 +9,7 @@ import { appStore, initialAppState, type LoadProgress } from '@/state/store';
 import LoadProgressBar, { LoadProgressView, progressView, SHOW_AFTER_MS } from '../LoadProgressBar';
 import { loadingText } from '../StatusLine';
 
-const p = (over: Partial<LoadProgress>): LoadProgress => ({ step: 'model', withModel: true, loaded: 0, total: null, ...over });
+const p = (over: Partial<LoadProgress>): LoadProgress => ({ loadId: 1, step: 'model', withModel: true, loaded: 0, total: null, ...over });
 
 afterEach(() => {
   cleanup();
@@ -61,6 +61,25 @@ describe('LoadProgressBar (store-connected)', () => {
     act(() => appStore.getState().setStatus('ready'));
     expect(appStore.getState().loadProgress).toBeNull();
     expect(screen.queryByRole('progressbar')).toBeNull();
+  });
+
+  it('a replacement load (a new loadId) restarts the delay, after the bar was shown or before (Codex review)', () => {
+    render(<LoadProgressBar />);
+    act(() => appStore.getState().setLoadProgress(p({ loadId: 1 })));
+    act(() => vi.advanceTimersByTime(SHOW_AFTER_MS));
+    expect(screen.getByRole('progressbar')).toBeTruthy();
+    // the user switches blast mid-load: a quick replacement must not inherit the shown state
+    act(() => appStore.getState().setLoadProgress(p({ loadId: 2 })));
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    act(() => vi.advanceTimersByTime(SHOW_AFTER_MS - 50));
+    act(() => appStore.getState().setLoadProgress(p({ loadId: 3 }))); // replaced again before showing
+    act(() => vi.advanceTimersByTime(SHOW_AFTER_MS - 50));
+    expect(screen.queryByRole('progressbar')).toBeNull(); // 3's own delay has not passed
+    act(() => vi.advanceTimersByTime(50));
+    expect(screen.getByRole('progressbar')).toBeTruthy();
+    // the same load moving from model to movement keeps the bar
+    act(() => appStore.getState().setLoadProgress(p({ loadId: 3, step: 'movement' })));
+    expect(screen.getByRole('progressbar')).toBeTruthy();
   });
 
   it('a load shorter than the delay never shows the bar', () => {

@@ -13,7 +13,7 @@ import { buildBlastDetail, buildBlastSummary } from '@/core/holes';
 import type { BlastParameters } from '@/core/types';
 import { startDataPipeline } from '@/state/pipeline';
 import { createAppStore, type LoadProgress } from '@/state/store';
-import { ApiDataSource, readPayload } from '../api';
+import { ApiDataSource, FallbackDataSource, readPayload } from '../api';
 import type { DataSource, ProgressListener } from '../index';
 
 /** A Response whose body arrives in `parts` chunks, with an X-Payload-Bytes header. */
@@ -66,6 +66,45 @@ describe('readPayload progress', () => {
   });
 });
 
+describe('FallbackDataSource progress (Codex review)', () => {
+  it('a download that fails midway: entering local fallback resets progress to "computing" (0, null)', async () => {
+    const model = generateBlockModel(getBlastConfig('b1040-017')!);
+    let release!: (m: typeof model) => void;
+    const primary = {
+      kind: 'api' as const,
+      listBlasts: async () => [],
+      getBlast: async () => buildBlastDetail(getBlastConfig('b1040-017')!, model),
+      async getModel(_id: string, _s?: AbortSignal, onProgress?: ProgressListener) {
+        onProgress?.(0, 100);
+        onProgress?.(100, 100); // all bytes, then a decode error
+        throw new Error('BMV1 BAD_DATA');
+      },
+      async getMovement(_id: string, _p: BlastParameters, _s?: AbortSignal, onProgress?: ProgressListener) {
+        onProgress?.(40, 100);
+        throw new Error('network reset');
+      },
+    } satisfies DataSource;
+    const pendingLocal = {
+      kind: 'local' as const,
+      listBlasts: async () => [],
+      getBlast: primary.getBlast,
+      getModel: () => new Promise<typeof model>((r) => (release = r)),
+      getMovement: () => new Promise<never>(() => {}),
+    } satisfies DataSource;
+    const ds = new FallbackDataSource(primary, pendingLocal, () => {});
+    const calls: [number, number | null][] = [];
+    const done = ds.getModel('b1040-017', undefined, (l, t) => calls.push([l, t]));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls.at(-1)).toEqual([0, null]); // local compute is running: no stale 100 %
+    release(model);
+    await done;
+    const mvCalls: [number, number | null][] = [];
+    void ds.getMovement('b1040-017', DEFAULT_BLAST_PARAMETERS, undefined, (l, t) => mvCalls.push([l, t]));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mvCalls.at(-1)).toEqual([0, null]);
+  });
+});
+
 /** A data source whose model / movement report two progress steps each before resolving. */
 function progressingSource(fail = false): DataSource {
   const cfg = getBlastConfig('b1040-017')!;
@@ -111,6 +150,7 @@ describe('pipeline → store.loadProgress', () => {
     const firstMovement = steps.findIndex((s) => s.step === 'movement');
     expect(firstMovement).toBeGreaterThan(0);
     expect(steps.slice(firstMovement).every((s) => s.step === 'movement' && s.withModel)).toBe(true);
+    expect(new Set(steps.map((s) => s.loadId)).size).toBe(1); // one load from model to movement
     expect(store.getState().status).toBe('ready');
     expect(store.getState().loadProgress).toBeNull();
     pipeline.dispose();
@@ -118,14 +158,18 @@ describe('pipeline → store.loadProgress', () => {
 
   it('a parameter change: the movement alone (withModel false), then cleared', async () => {
     const store = createAppStore();
+    const initial = record(store);
     const pipeline = startDataPipeline(store, progressingSource());
     await pipeline.settled;
+    const blastLoadId = (initial.find(Boolean) as LoadProgress).loadId;
     const seen = record(store);
     store.getState().setParams({ ...DEFAULT_BLAST_PARAMETERS, maxThrow: 12 });
     await pipeline.settled;
     const steps = seen.filter(Boolean) as LoadProgress[];
     expect(steps.length).toBeGreaterThan(0);
     expect(steps.every((s) => s.step === 'movement' && !s.withModel)).toBe(true);
+    expect(new Set(steps.map((s) => s.loadId)).size).toBe(1);
+    expect(steps[0].loadId).not.toBe(blastLoadId); // a new load: the bar restarts its show-delay
     expect(store.getState().loadProgress).toBeNull();
     pipeline.dispose();
   });

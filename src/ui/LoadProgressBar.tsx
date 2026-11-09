@@ -65,7 +65,7 @@ export function LoadProgressView({ progress }: { progress: LoadProgress }) {
   );
 }
 
-/** Mounted for the duration of one load: hidden until SHOW_AFTER_MS, then the bar. */
+/** Mounted for one load (keyed by its loadId): hidden until SHOW_AFTER_MS, then the bar. */
 function DelayedProgress({ progress }: { progress: LoadProgress }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
@@ -77,6 +77,7 @@ function DelayedProgress({ progress }: { progress: LoadProgress }) {
 
 export default function LoadProgressBar() {
   const progress = useAppStore((s) => s.loadProgress);
-  // Unmounted when the load ends, so the next load starts hidden again.
-  return progress ? <DelayedProgress progress={progress} /> : null;
+  // Keyed by the load: a replacement load (blast switch, new parameters) remounts and starts hidden
+  // again; the same load moving from model to movement keeps its state.
+  return progress ? <DelayedProgress key={progress.loadId} progress={progress} /> : null;
 }

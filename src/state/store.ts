@@ -52,6 +52,8 @@ export interface SectionState {
  * `total` null when unknown (local compute reports no bytes).
  */
 export interface LoadProgress {
+  /** Identity of one top-level load (a blast switch or a parameter change); kept from model to movement. */
+  loadId: number;
   step: 'model' | 'movement';
   withModel: boolean;
   loaded: number;

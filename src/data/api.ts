@@ -194,7 +194,13 @@ export class FallbackDataSource implements DataSource {
     return this.served;
   }
 
-  private async run<T>(call: (ds: DataSource) => Promise<T>, signal?: AbortSignal, tracks = false): Promise<T> {
+  /** `onFallbackStart`: runs just before the fallback (e.g. reset a half-finished download's progress). */
+  private async run<T>(
+    call: (ds: DataSource) => Promise<T>,
+    signal?: AbortSignal,
+    tracks = false,
+    onFallbackStart?: () => void,
+  ): Promise<T> {
     try {
       const result = await call(this.primary);
       if (tracks) this.served = this.primary.kind;
@@ -203,6 +209,7 @@ export class FallbackDataSource implements DataSource {
       if (isAbortError(err) || signal?.aborted) throw err;
       console.warn('[bmv] API failed; falling back to local compute.', err);
       this.onFallback?.(err);
+      onFallbackStart?.();
       const result = await call(this.fallback);
       if (tracks) this.served = this.fallback.kind;
       return result;
@@ -218,10 +225,11 @@ export class FallbackDataSource implements DataSource {
   }
 
   getModel(id: string, signal?: AbortSignal, onProgress?: ProgressListener): Promise<BlockModel> {
-    return this.run((ds) => ds.getModel(id, signal, onProgress), signal, true);
+    // A download that failed midway must not leave its bytes on the bar while local compute runs.
+    return this.run((ds) => ds.getModel(id, signal, onProgress), signal, true, () => onProgress?.(0, null));
   }
 
   getMovement(id: string, params: BlastParameters, signal?: AbortSignal, onProgress?: ProgressListener): Promise<MovementResult> {
-    return this.run((ds) => ds.getMovement(id, params, signal, onProgress), signal, true);
+    return this.run((ds) => ds.getMovement(id, params, signal, onProgress), signal, true, () => onProgress?.(0, null));
   }
 }

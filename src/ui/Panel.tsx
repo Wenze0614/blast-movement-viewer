@@ -12,6 +12,7 @@ import Legend from './Legend';
 import ParamsPanel from './ParamsPanel';
 import SourceBadge from './SourceBadge';
 import StatsTable from './StatsTable';
+import LoadProgressBar from './LoadProgressBar';
 import StatusLine from './StatusLine';
 import ViewControls from './ViewControls';
 
@@ -30,6 +31,7 @@ export default function Panel() {
             <SourceBadge />
           </div>
         </div>
+        <LoadProgressBar />
         <StatusLine />
       </header>
       <section aria-label="Blast playback" className="border-t border-border pt-3">

@@ -45,6 +45,21 @@ export interface SectionState {
 }
 
 /** P6 frame statistics, published by the engine's perf system about twice a second. */
+/**
+ * Progress of the current load (the bar under the blast picker). A blast switch loads the model
+ * then the movement (`withModel`); a parameter change loads only the movement. `loaded` / `total`
+ * are the current payload's downloaded and total bytes: 0 while the server is still computing,
+ * `total` null when unknown (local compute reports no bytes).
+ */
+export interface LoadProgress {
+  /** Identity of one top-level load (a blast switch or a parameter change); kept from model to movement. */
+  loadId: number;
+  step: 'model' | 'movement';
+  withModel: boolean;
+  loaded: number;
+  total: number | null;
+}
+
 export interface PerfStats {
   /** Frames per second over the last window of ACTIVE frames (render on demand). */
   fps: number;
@@ -71,6 +86,8 @@ export interface AppState {
 
   // ── Async status ─────────────────────────────────────────────────────────
   status: LoadStatus;
+  /** The current load's progress; null when nothing is loading. */
+  loadProgress: LoadProgress | null;
   /** Where the current model/movement came from (drives the source badge). */
   source: DataSourceKind | null;
   /** ms for the last movement fetch/compute (badge: "● API · 38 ms"). */
@@ -126,6 +143,7 @@ export interface AppActions {
   resetParams(): void;
 
   setStatus(status: LoadStatus, error?: string | null): void;
+  setLoadProgress(progress: LoadProgress | null): void;
   /** An API call failed and local compute served it instead (DataSource `onFallback`). */
   setFallback(reason: string | null): void;
   /** Clears movement, derived slots and selection (they belong to the previous model). */
@@ -167,6 +185,7 @@ export function initialAppState(): AppState {
     blast: null,
     params: { ...DEFAULT_BLAST_PARAMETERS },
     status: 'idle',
+    loadProgress: null,
     source: null,
     lastLatencyMs: null,
     fallback: null,
@@ -264,7 +283,9 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
       setParams: (patch) => set(paramsUpdate(get(), { ...get().params, ...patch })),
       resetParams: () => set(paramsUpdate(get(), get().blast?.defaultParams ?? DEFAULT_BLAST_PARAMETERS)),
 
-      setStatus: (status, error = null) => set({ status, error }),
+      // Anything but 'loading' ends the load, so its progress goes with it.
+      setStatus: (status, error = null) => set(status === 'loading' ? { status, error } : { status, error, loadProgress: null }),
+      setLoadProgress: (loadProgress) => set({ loadProgress }),
       setFallback: (fallback) => set({ fallback }),
       // A new model invalidates the movement and everything derived from it, and rewinds.
       setModel: (model, source) => set(modelUpdate(model, source)),
@@ -279,6 +300,7 @@ export function createAppStore(initial: Partial<AppState> = {}): AppStore {
           ...(source === 'api' ? { fallback: null } : {}),
           lastLatencyMs: latencyMs ?? null,
           status: 'ready',
+          loadProgress: null,
           error: null,
           polygons: null,
           reconciliation: null,

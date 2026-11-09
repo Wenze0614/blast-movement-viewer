@@ -18,6 +18,9 @@ export const CACHE = {
   none: 'no-store',
 } as const;
 
+/** Response header with the gzipped payload's byte length (download progress; data/api.ts). */
+export const PAYLOAD_BYTES_HEADER = 'X-Payload-Bytes';
+
 /** BMV1 payloads travel gzipped, as a gzip file (see `binary`). */
 export const BINARY_TYPE = 'application/gzip';
 
@@ -67,6 +70,8 @@ export function binary(gzipped: Uint8Array<ArrayBuffer>, opts: CacheOptions & { 
   }
   const headers = cacheHeaders(opts);
   headers.set('Content-Type', BINARY_TYPE);
+  // The payload's size, also for streamed bodies (no Content-Length): the client shows progress.
+  headers.set(PAYLOAD_BYTES_HEADER, String(gzipped.byteLength));
   if (gzipped.byteLength > STREAM_OVER_BYTES) {
     // Vercel Functions cap a non-streamed response body at 4.5 MB (413 FUNCTION_PAYLOAD_TOO_LARGE);
     // streamed bodies are exempt. Only the scale blast's payloads (~13 MB) take this path.

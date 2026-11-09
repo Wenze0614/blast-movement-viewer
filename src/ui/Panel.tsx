@@ -38,7 +38,7 @@ export default function Panel() {
         <BlastControls />
       </section>
       <section aria-label="Blast parameters" className="border-t border-border pt-3">
-        {/* Remount per blast: a pending (debounced) edit never carries over to another blast. */}
+        {/* Remount per blast: an unapplied draft never carries over to another blast. */}
         <ParamsPanel key={blastId} />
       </section>
       <section aria-label="View" className="space-y-3 border-t border-border pt-3">

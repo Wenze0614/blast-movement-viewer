@@ -61,7 +61,8 @@ Media to capture in a browser (not yet recorded); add the image links once the f
   ore metal recovery for three scenarios (in-situ / original, post-blast / original, post-blast /
   adjusted), with deltas and formula tooltips.
 - **Parameters.** Initiation, row and hole delays, max throw, swell, randomness, back-row and toe
-  ratios, and more. Each change requests a new movement from the API (debounced).
+  ratios, and more. Changes are staged (marked with a dot) and sent together when you press
+  **Update**, so a 2M-block blast recomputes once, not once per slider.
 - **Source badge.** `● API · 42 ms`, `● Local fallback` (the API failed; hover for why) or
   `● Local · 12 ms`.
 - **About.** A modal with the framing above, what this is not, and links.

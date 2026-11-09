@@ -48,7 +48,7 @@
 | P2 | Click-to-inspect | Highlight the block (rewrite its `aColor`) plus an inspector card. CPU ray–AABB picking works at any point in the scrub (ADR-2). |
 | P3 | Section/slice slider + "ore only" toggle | Shows ore pushed under waste. A `uSection` plane uniform + `discard` in the block shader. |
 | P4 | Visual quality | Shader edge-darkening, hemisphere + directional lighting, optional baked per-block occlusion (`aOcclusion`), translucent dig-line curtain, unblasted context rock, plan-view camera button. No post-processing. |
-| P5 | Blast parameter panel → **movement endpoint** | Debounced (~300 ms) `GET /api/blasts/:id/movement?...`. Animates to the new result. Falls back to local compute if the API fails. |
+| P5 | Blast parameter panel → **movement endpoint** | Edits are staged and sent together on **Update** (was a 300 ms debounce; batching avoids one multi-second 2M-block recompute per change) as `GET /api/blasts/:id/movement?...`. Animates to the new result. Falls back to local compute if the API fails. |
 | P6 | Performance via the **dense demo blast** | `b1040-031` = 80×48×8 bounding grid (30,720 cells), 27,088 blocks inside its outline, served by the API. FPS overlay in dev. Replaces the old client-side "dense toggle". |
 | P7 | README, About modal, Loom | See §7. |
 | **P8** | **API** (ADR-10/11/12) | Next.js route handlers: `GET /api/blasts`, `GET /api/blasts/:id`, `GET /api/blasts/:id/model` (binary), `GET /api/blasts/:id/movement` (binary, CDN-cached), `GET /api/health`. Zod-validated. Codec round-trip and endpoint tests. Blast picker in the panel header. |

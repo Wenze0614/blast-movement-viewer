@@ -11,7 +11,7 @@ export default function Home() {
         <section className="relative min-h-[60vh] flex-1 bg-viewport min-[900px]:min-h-0" aria-label="3D view">
           <ViewerLoader />
         </section>
-        <aside className="w-full shrink-0 border-border bg-surface p-4 min-[900px]:w-[360px] min-[900px]:overflow-y-auto min-[900px]:border-l">
+        <aside className="relative w-full shrink-0 border-border bg-surface p-4 min-[900px]:w-[360px] min-[900px]:overflow-y-auto min-[900px]:border-l">
           <Panel />
         </aside>
       </main>

@@ -212,6 +212,8 @@ export function startDataPipeline(store: AppStore, data: DataSource, options: Da
       const movement = await data.getMovement(blastId, params, ctrl.signal, progressFor(loadId, 'movement', afterModel, isCurrent));
       if (!isCurrent()) return;
       if (!isMovementFor(movement, model, params)) {
+        // Recovery computes or refetches: the finished download must not stay on the bar.
+        store.getState().setLoadProgress({ loadId, step: 'movement', withModel: afterModel, loaded: 0, total: null });
         const detail = `movement ${movement.paramsHash} (${movement.delay.length} blocks, ${data.kind}) does not belong to model ${model.configHash} (${model.count} blocks) with the current params`;
         if (!resync) {
           console.warn(`[bmv] ${detail} again; using local compute for both model and movement.`);

@@ -174,6 +174,46 @@ describe('pipeline → store.loadProgress', () => {
     pipeline.dispose();
   });
 
+  it('a downloaded movement that turns out mismatched: recovery shows "computing", not the finished download (Codex review)', async () => {
+    const cfg = getBlastConfig('b1040-017')!;
+    const model = generateBlockModel(cfg);
+    let modelCalls = 0;
+    let releaseReload!: () => void;
+    const data: DataSource = {
+      kind: 'api',
+      listBlasts: async () => [buildBlastSummary(cfg)],
+      getBlast: async () => buildBlastDetail(cfg, model),
+      async getModel() {
+        modelCalls++;
+        if (modelCalls > 1) await new Promise<void>((r) => (releaseReload = r)); // the resync reload
+        return model;
+      },
+      async getMovement(_id, params, _s, onProgress) {
+        onProgress?.(0, 100);
+        onProgress?.(100, 100); // fully downloaded…
+        return computeMovement(model, { ...params, seed: params.seed + 1 }); // …but for other params
+      },
+    };
+    const pendingLocal: DataSource = {
+      kind: 'local',
+      listBlasts: async () => [],
+      getBlast: data.getBlast,
+      getModel: () => new Promise(() => {}),
+      getMovement: () => new Promise(() => {}),
+    };
+    const store = createAppStore();
+    const pipeline = startDataPipeline(store, data, { local: pendingLocal });
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    for (let i = 0; i < 20 && modelCalls < 2; i++) await tick();
+    expect(store.getState().loadProgress).toMatchObject({ loaded: 0, total: null }); // reloading the model
+    const id = store.getState().loadProgress!.loadId;
+    releaseReload();
+    for (let i = 0; i < 20; i++) await tick();
+    // second mismatch → local pair (held pending): still "computing", same load
+    expect(store.getState().loadProgress).toMatchObject({ loadId: id, loaded: 0, total: null });
+    pipeline.dispose();
+  });
+
   it('a failed load clears the progress with the error', async () => {
     const store = createAppStore();
     const pipeline = startDataPipeline(store, progressingSource(true));

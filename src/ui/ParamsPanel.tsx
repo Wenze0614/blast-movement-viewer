@@ -1,18 +1,19 @@
 'use client';
 /**
  * Blast parameter panel (P5). Sliders over the ADR-12 ranges (core/params.ts, the table the API
- * validates against) plus the movement seed. Edits are held as a local draft and written to the
- * store after PARAM_DEBOUNCE_MS without further edits; the pipeline then requests the movement
- * (aborting any older request) and playback rewinds to 0 (Stage 2 decision 9).
+ * validates against) plus the movement seed. Edits are held as a local draft: nothing is sent until
+ * the user presses Update (or Enter in the seed field), so several changes go out as ONE movement
+ * request instead of one per change (a 2M-block movement takes seconds). On Update the draft is
+ * written to the store; the pipeline then requests the movement (aborting any older request) and
+ * playback rewinds to 0 (Stage 2 decision 9). Reset to defaults stages the defaults in the draft
+ * too, so the rule is one: only Update recomputes. Discard drops the draft.
  * Remounted per blast (`key`), so a pending draft never leaks into another blast.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { INITIATIONS, PARAM_RANGES, type NumericParamKey } from '@/core/params';
 import type { BlastParameters, Initiation } from '@/core/types';
 import { useAppStore } from '@/state/hooks';
 import { fmt } from './format';
-
-export const PARAM_DEBOUNCE_MS = 300;
 
 interface SliderSpec {
   key: Exclude<NumericParamKey, 'seed'>;
@@ -56,13 +57,42 @@ export const MORE_SLIDERS: readonly SliderSpec[] = [
 
 type Draft = Partial<BlastParameters>;
 
-function Slider({ spec, value, disabled, onChange }: { spec: SliderSpec; value: number; disabled: boolean; onChange: (v: number) => void }) {
+/** The draft keys whose value differs from the applied params (what Update would change). */
+export function changedKeys(draft: Draft | null, params: BlastParameters): (keyof BlastParameters)[] {
+  if (!draft) return [];
+  return (Object.keys(draft) as (keyof BlastParameters)[]).filter((k) => draft[k] !== undefined && draft[k] !== params[k]);
+}
+
+/** Marks a control whose draft value is not applied yet. */
+function ChangedDot({ changed }: { changed: boolean }) {
+  if (!changed) return null;
+  return (
+    <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)] align-middle" title="Changed, not applied yet" aria-label="changed" />
+  );
+}
+
+function Slider({
+  spec,
+  value,
+  changed,
+  disabled,
+  onChange,
+}: {
+  spec: SliderSpec;
+  value: number;
+  changed: boolean;
+  disabled: boolean;
+  onChange: (v: number) => void;
+}) {
   const r = PARAM_RANGES[spec.key];
   const id = `param-${spec.key}`;
   return (
-    <div title={spec.hint}>
+    <div title={spec.hint} data-changed={changed || undefined}>
       <div className="flex items-baseline justify-between text-xs">
-        <label htmlFor={id}>{spec.label}</label>
+        <span>
+          <ChangedDot changed={changed} />
+          <label htmlFor={id}>{spec.label}</label>
+        </span>
         <output htmlFor={id} className="text-muted tabular-nums">
           {fmt(value, spec.digits)} {spec.unit}
         </output>
@@ -87,43 +117,48 @@ export default function ParamsPanel() {
   const ready = useAppStore((s) => s.blast !== null);
   const defaults = useAppStore((s) => s.blast?.defaultParams ?? null);
   const setParams = useAppStore((s) => s.setParams);
-  const resetParams = useAppStore((s) => s.resetParams);
 
   const [draft, setDraft] = useState<Draft | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
 
   const value = <K extends keyof BlastParameters>(k: K): BlastParameters[K] => (draft?.[k] ?? params[k]) as BlastParameters[K];
+  const changed = changedKeys(draft, params);
+  const isChanged = (k: keyof BlastParameters) => changed.includes(k);
 
-  const edit = (patch: Draft) => {
-    const next = { ...draft, ...patch };
-    setDraft(next);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      setParams(next);
-      setDraft(null);
-    }, PARAM_DEBOUNCE_MS);
-  };
+  const edit = (patch: Draft) => setDraft({ ...draft, ...patch });
 
-  const reset = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
+  /** Send every pending change as one store write (one movement request). */
+  const apply = (e?: FormEvent) => {
+    // Enter in the seed field submits the form; the Update button calls this directly.
+    e?.preventDefault();
+    if (!ready || changed.length === 0) return;
+    const patch: Draft = {};
+    for (const k of changed) (patch as Record<string, unknown>)[k] = draft![k];
+    setParams(patch);
     setDraft(null);
-    resetParams();
   };
 
-  const atDefaults =
-    draft === null && defaults !== null && (Object.keys(defaults) as (keyof BlastParameters)[]).every((k) => defaults[k] === params[k]);
+  const discard = () => setDraft(null);
+
+  /** Stage the blast defaults; like any edit, they apply on Update. */
+  const reset = () => {
+    if (defaults) setDraft({ ...defaults });
+  };
+
+  const atDefaults = defaults !== null && (Object.keys(defaults) as (keyof BlastParameters)[]).every((k) => defaults[k] === value(k));
   const seedMax = PARAM_RANGES.seed.max;
+  const slider = (spec: SliderSpec) => (
+    <Slider
+      key={spec.key}
+      spec={spec}
+      value={value(spec.key)}
+      changed={isChanged(spec.key)}
+      disabled={!ready}
+      onChange={(v) => edit({ [spec.key]: v })}
+    />
+  );
 
   return (
-    <div className="space-y-2">
+    <form className="space-y-2" onSubmit={apply}>
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">Blast parameters</h2>
         <button
@@ -138,7 +173,10 @@ export default function ParamsPanel() {
       <fieldset className="space-y-2 rounded border border-border p-2">
         <legend className="px-1 text-xs text-muted">Firing sequence</legend>
         <label className="flex items-center justify-between gap-2 text-xs" title="Seen from behind the blast, looking at the free face">
-          Initiation
+          <span>
+            <ChangedDot changed={isChanged('initiation')} />
+            Initiation
+          </span>
           <select
             className="rounded border border-border bg-surface px-1 py-0.5 text-sm"
             value={value('initiation')}
@@ -152,24 +190,21 @@ export default function ParamsPanel() {
             ))}
           </select>
         </label>
-        {TIMING_SLIDERS.map((spec) => (
-          <Slider key={spec.key} spec={spec} value={value(spec.key)} disabled={!ready} onChange={(v) => edit({ [spec.key]: v })} />
-        ))}
+        {TIMING_SLIDERS.map(slider)}
         <p className="text-[11px] text-muted">Rock moves toward the holes that fired before it (burden relief).</p>
       </fieldset>
-      {MAIN_SLIDERS.map((spec) => (
-        <Slider key={spec.key} spec={spec} value={value(spec.key)} disabled={!ready} onChange={(v) => edit({ [spec.key]: v })} />
-      ))}
+      {MAIN_SLIDERS.map(slider)}
       <details className="space-y-2">
         <summary className="cursor-pointer text-xs text-muted">More parameters</summary>
         <div className="space-y-2 pt-1">
-          {MORE_SLIDERS.map((spec) => (
-            <Slider key={spec.key} spec={spec} value={value(spec.key)} disabled={!ready} onChange={(v) => edit({ [spec.key]: v })} />
-          ))}
+          {MORE_SLIDERS.map(slider)}
         </div>
       </details>
       <label className="flex items-center justify-between gap-2 text-xs" title="Seed of the movement noise (integer ≥ 0)">
-        Seed
+        <span>
+          <ChangedDot changed={isChanged('seed')} />
+          Seed
+        </span>
         <input
           type="number"
           inputMode="numeric"
@@ -185,7 +220,31 @@ export default function ParamsPanel() {
           }}
         />
       </label>
-      <p className="text-[11px] text-muted">Heuristic movement model, not physics. Changes refetch the movement and rewind the blast.</p>
-    </div>
+      <p className="text-[11px] text-muted">Heuristic movement model, not physics. Update recomputes the movement and rewinds the blast.</p>
+      {changed.length > 0 && (
+        // Sticks to the bottom of the scrolling panel; -bottom-4 / pb-4 cover the aside's p-4 so
+        // the controls behind never show under it.
+        <div className="sticky -bottom-4 z-10 -mx-4 bg-surface px-4 pt-1 pb-4">
+          <div role="status" className="flex items-center justify-between gap-2 rounded border border-accent px-2 py-1.5">
+            <span className="text-xs">
+              {changed.length} unapplied {changed.length === 1 ? 'change' : 'changes'}
+            </span>
+            <span className="flex gap-1.5">
+              <button type="button" onClick={discard} className="rounded border border-border px-2 py-1 text-xs">
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={() => apply()}
+                disabled={!ready}
+                className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white disabled:opacity-40"
+              >
+                Update
+              </button>
+            </span>
+          </div>
+        </div>
+      )}
+    </form>
   );
 }
